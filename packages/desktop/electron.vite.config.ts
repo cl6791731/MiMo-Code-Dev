@@ -21,7 +21,12 @@ export default defineConfig({
       rollupOptions: {
         input: { index: "src/main/index.ts" },
       },
-      externalizeDeps: { include: ["*"] },
+      externalizeDeps: {
+        include: [
+          nodePtyPkg, "effect", "electron-log", "electron-store", "electron-updater",
+          "electron-window-state", "electron-context-menu", "drizzle-orm", "marked",
+        ],
+      },
     },
     plugins: [
       {
