@@ -51,10 +51,15 @@ jobs:
       - name: Create zip archive
         working-directory: packages/desktop/dist
         run: |
-          cd mac-arm64 && zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code.app" || \
-            (cd ../..; ls -la dist/mac-arm64/; exit 1)
-          cd ../mac-x64 && zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code.app" || \
-            (cd ../..; ls -la dist/mac-x64/; exit 1)
+          if [ -d "mac-arm64" ]; then
+            cd mac-arm64
+            zip -r -y "../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code.app"
+          fi
+          if [ -d "mac-x64" ]; then
+            cd mac-x64
+            zip -r -y "../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code.app"
+          fi
+          ls -lh *.zip 2>/dev/null || echo "No zip files found"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
