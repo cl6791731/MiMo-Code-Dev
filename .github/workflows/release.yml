@@ -39,7 +39,7 @@ jobs:
 
       - name: Package macOS .app
         working-directory: packages/desktop
-        run: electron-builder --mac --config electron-builder.config.ts --publish never
+        run: npx electron-builder --mac --config electron-builder.config.ts --publish never
         env:
           OPENCODE_CHANNEL: prod
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
