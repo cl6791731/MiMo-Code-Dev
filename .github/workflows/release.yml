@@ -53,11 +53,11 @@ jobs:
         run: |
           if [ -d "mac-arm64" ]; then
             cd mac-arm64
-            zip -r -y "../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code.app"
+            zip -r -y "../MiMo-Code-Dev-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code Dev.app"
           fi
           if [ -d "mac-x64" ]; then
             cd mac-x64
-            zip -r -y "../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code.app"
+            zip -r -y "../MiMo-Code-Dev-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code Dev.app"
           fi
           ls -lh *.zip 2>/dev/null || echo "No zip files found"
 
@@ -65,9 +65,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "MiMo Code ${{ steps.version.outputs.version }}"
+          name: "MiMo Code Dev ${{ steps.version.outputs.version }}"
           body: |
-            ## MiMo Code v${{ steps.version.outputs.version }}
+            ## MiMo Code Dev v${{ steps.version.outputs.version }}
 
             ### 🍎 macOS 安装
             1. 下载对应架构的 zip 文件
@@ -75,13 +75,13 @@ jobs:
             3. 首次打开如果提示"无法验证开发者"，请到 **系统设置 → 隐私与安全性** 点击"仍然允许"
 
             ### 📦 包含内容
-            - `MiMo-Code-*-darwin-arm64.zip` — Apple Silicon (M1/M2/M3/M4)
-            - `MiMo-Code-*-darwin-x64.zip` — Intel Mac
+            - `MiMo-Code-Dev-*-darwin-arm64.zip` — Apple Silicon (M1/M2/M3/M4)
+            - `MiMo-Code-Dev-*-darwin-x64.zip` — Intel Mac
 
             ### 🔧 从源码构建
             ```bash
-            git clone https://github.com/cl6791731/MiMo-Code.git
-            cd MiMo-Code
+            git clone https://github.com/cl6791731/MiMo-Code-Dev.git
+            cd MiMo-Code-Dev
             bun install
             cd packages/desktop
             OPENCODE_CHANNEL=prod bun run build

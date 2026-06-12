@@ -107,7 +107,7 @@ function getConfig() {
         appId: "ai.mimocode.desktop.beta",
         productName: "MiMo Code Beta",
         protocols: { name: "MiMo Code Beta", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "mimocode", repo: "mimocode-beta", channel: "latest" },
+        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
         rpm: { packageName: "mimocode-beta" },
       }
     }
@@ -117,8 +117,8 @@ function getConfig() {
         appId: "ai.mimocode.desktop",
         productName: "MiMo Code",
         protocols: { name: "MiMo Code", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "mimocode", repo: "mimocode", channel: "latest" },
-        rpm: { packageName: "mimocode" },
+        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
+        rpm: { packageName: "mimocode-dev" },
       }
     }
   }
