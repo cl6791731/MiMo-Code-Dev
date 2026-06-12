@@ -115,7 +115,7 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.mimocode.desktop",
-        productName: "MiMo Code",
+        productName: "MiMo Code Dev",
         protocols: { name: "MiMo Code", schemes: ["mimocode"] },
         publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
         rpm: { packageName: "mimocode-dev" },
