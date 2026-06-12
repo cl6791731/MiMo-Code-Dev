@@ -22,7 +22,7 @@ export default defineConfig({
         input: { index: "src/main/index.ts" },
         external: ["opencode-web-ui.gen.ts"],
       },
-      externalizeDeps: { include: [nodePtyPkg] },
+      externalizeDeps: { include: [nodePtyPkg, "electron-log", "electron-store", "electron-updater", "electron-window-state"] },
     },
     plugins: [
       {
