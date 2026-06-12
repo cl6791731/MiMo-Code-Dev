@@ -20,22 +20,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: "src/main/index.ts" },
-        external: (id) => {
-          // Externalize all node builtins and electron dependencies
-          if (id.startsWith("node:")) return true
-          if (id.startsWith("electron")) return true
-          if (id.includes("electron-log")) return true
-          if (id.includes("electron-store")) return true
-          if (id.includes("electron-updater")) return true
-          if (id.includes("electron-window-state")) return true
-          if (id.includes("electron-context-menu")) return true
-          if (id.includes("@lydell/node-pty")) return true
-          if (id.includes("drizzle-orm")) return true
-          if (id.includes("marked")) return true
-          return false
-        },
       },
-      externalizeDeps: { include: [nodePtyPkg] },
+      externalizeDeps: { include: ["*"] },
     },
     plugins: [
       {
