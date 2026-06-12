@@ -39,7 +39,7 @@ jobs:
 
       - name: Package macOS .app
         working-directory: packages/desktop
-        run: bun run package:mac --publish never
+        run: electron-builder --mac --config electron-builder.config.ts --publish never
         env:
           OPENCODE_CHANNEL: prod
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,10 +51,10 @@ jobs:
       - name: Create zip archive
         working-directory: packages/desktop/dist
         run: |
-          cd mac-arm64
-          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code Dev.app"
-          cd ../mac-x64
-          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code Dev.app"
+          cd mac-arm64 && zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code.app" || \
+            (cd ../..; ls -la dist/mac-arm64/; exit 1)
+          cd ../mac-x64 && zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code.app" || \
+            (cd ../..; ls -la dist/mac-x64/; exit 1)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
