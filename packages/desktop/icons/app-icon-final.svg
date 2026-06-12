@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Gradient: vibrant orange (Xiaomi brand) -->
+    <linearGradient id="orangeGrad" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF8A50"/>
+      <stop offset="50%" stop-color="#FF6900"/>
+      <stop offset="100%" stop-color="#E85D00"/>
+    </linearGradient>
+    
+    <!-- Subtle inner shadow for depth -->
+    <radialGradient id="innerShadow" cx="50%" cy="50%" r="50%">
+      <stop offset="85%" stop-color="transparent"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0.08)"/>
+    </radialGradient>
+  </defs>
+  
+  <!-- Background: rounded square -->
+  <rect width="1024" height="1024" rx="228" fill="url(#orangeGrad)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#innerShadow)"/>
+  
+  <!-- Main symbol: Code brackets < / > with integrated M -->
+  <!-- This creates a visual that reads as both code and "M" for MiMo -->
+  <g fill="none" stroke="white" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Left bracket < -->
+    <polyline points="380,340 220,512 380,684"/>
+    <!-- Right bracket > -->
+    <polyline points="644,340 804,512 644,684"/>
+    <!-- Center slash / (creates M shape with brackets) -->
+    <line x1="512" y1="280" x2="512" y2="744"/>
+  </g>
+  
+  <!-- Small "Mi" text at bottom for brand recognition -->
+  <text x="512" y="920" text-anchor="middle" 
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" 
+        font-size="80" font-weight="600" letter-spacing="8"
+        fill="white" opacity="0.8">MiMo</text>
+</svg>
