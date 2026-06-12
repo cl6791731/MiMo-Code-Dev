@@ -33,7 +33,7 @@ jobs:
 
       - name: Build Electron app
         working-directory: packages/desktop
-        run: bun run --bun electron-vite build
+        run: npx electron-vite build
         env:
           OPENCODE_CHANNEL: prod
 
