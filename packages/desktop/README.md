@@ -1,6 +1,6 @@
-# OpenCode Desktop
+# MiMo Code Dev Desktop
 
-The OpenCode Desktop app, built with Electron.
+MiMo Code Dev Desktop app, built with Electron.
 
 ## Development
 
