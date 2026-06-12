@@ -113,6 +113,16 @@ bun turbo typecheck
 
 ---
 
+## 社区交流
+
+扫描下方二维码加入微信交流群：
+
+<p align="center">
+  <img src="assets/readme/wechat-qrcode.jpg" alt="微信交流群二维码" width="240">
+</p>
+
+---
+
 ## 许可证
 
 本项目代码基于 [MIT License](./LICENSE) 许可证。
