@@ -20,9 +20,21 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: "src/main/index.ts" },
-        external: ["opencode-web-ui.gen.ts"],
+        external: [
+          "electron",
+          "electron/*",
+          "electron-log",
+          "electron-log/*",
+          "electron-store",
+          "electron-updater",
+          "electron-window-state",
+          "electron-context-menu",
+          "@lydell/node-pty",
+          "better-sqlite3",
+          "bun:sqlite",
+        ],
       },
-      externalizeDeps: { include: [nodePtyPkg, "electron-log", "electron-store", "electron-updater", "electron-window-state"] },
+      externalizeDeps: { include: [nodePtyPkg] },
     },
     plugins: [
       {
