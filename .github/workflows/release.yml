@@ -29,13 +29,13 @@ jobs:
         run: bun run script/build.ts --single --skip-install
         env:
           OPENCODE_CHANNEL: prod
+          BUN_TMPDIR: /tmp
 
       - name: Build Electron app
         working-directory: packages/desktop
-        run: bun run build
+        run: bun run --bun electron-vite build
         env:
           OPENCODE_CHANNEL: prod
-          BUN_TMPDIR: /tmp
 
       - name: Package macOS .app
         working-directory: packages/desktop
