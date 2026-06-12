@@ -6,6 +6,9 @@ on:
       - 'v*'  # 推送 v 开头的 tag 时触发，如 v0.1.0
   workflow_dispatch:  # 手动触发
 
+permissions:
+  contents: write  # 允许写入仓库内容（创建 Release）
+
 jobs:
   build-macos:
     runs-on: macos-latest  # 使用 macOS 运行器
@@ -47,9 +50,9 @@ jobs:
         working-directory: packages/desktop/dist
         run: |
           cd mac-arm64
-          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code.app"
+          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-arm64.zip" "MiMo Code Dev.app"
           cd ../mac-x64
-          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code.app"
+          zip -r -y "../../MiMo-Code-${{ steps.version.outputs.version }}-darwin-x64.zip" "MiMo Code Dev.app"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -61,12 +64,12 @@ jobs:
 
             ### 🍎 macOS 安装
             1. 下载对应架构的 zip 文件
-            2. 解压后将 `MiMo Code.app` 拖到 `/Applications` 文件夹
+            2. 解压后将 `MiMo Code Dev.app` 拖到 `/Applications` 文件夹
             3. 首次打开如果提示"无法验证开发者"，请到 **系统设置 → 隐私与安全性** 点击"仍然允许"
 
             ### 📦 包含内容
-            - `MiMo Code-xxx-darwin-arm64.zip` — Apple Silicon (M1/M2/M3/M4)
-            - `MiMo Code-xxx-darwin-x64.zip` — Intel Mac
+            - `MiMo-Code-*-darwin-arm64.zip` — Apple Silicon (M1/M2/M3/M4)
+            - `MiMo-Code-*-darwin-x64.zip` — Intel Mac
 
             ### 🔧 从源码构建
             ```bash
