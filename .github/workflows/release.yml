@@ -26,7 +26,7 @@ jobs:
 
       - name: Build opencode binary
         working-directory: packages/opencode
-        run: bun run script/build.ts --single
+        run: bun run script/build.ts --single --skip-install
         env:
           OPENCODE_CHANNEL: prod
 
@@ -35,6 +35,7 @@ jobs:
         run: bun run build
         env:
           OPENCODE_CHANNEL: prod
+          BUN_TMPDIR: /tmp
 
       - name: Package macOS .app
         working-directory: packages/desktop
