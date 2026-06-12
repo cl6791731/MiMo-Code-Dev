@@ -39,9 +39,10 @@ jobs:
 
       - name: Package macOS .app
         working-directory: packages/desktop
-        run: bun run package:mac
+        run: bun run package:mac --publish never
         env:
           OPENCODE_CHANNEL: prod
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get version from tag
         id: version
