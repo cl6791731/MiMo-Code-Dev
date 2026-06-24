@@ -2,7 +2,7 @@ import { Prompt, type PromptRef } from "@tui/component/prompt"
 import { createEffect, createMemo, createSignal, Show } from "solid-js"
 import path from "path"
 import { Logo } from "../component/logo"
-import { logos, type LogoKey } from "@/cli/logo"
+import { logoThin, logos, type LogoKey } from "@/cli/logo"
 import { StarryBackground } from "../component/starry-background"
 import { BackgroundImage } from "../component/background-image"
 import { useProject } from "../context/project"
@@ -16,6 +16,7 @@ import { useKV } from "../context/kv"
 import { useLanguage } from "@tui/context/language"
 import { TuiPluginRuntime } from "../plugin"
 import { Global } from "@/global"
+import { isPlainTerminal } from "../util/terminal"
 
 let once = false
 
@@ -29,6 +30,7 @@ export function Home() {
   const local = useLocal()
   const kv = useKV()
   const t = useLanguage().t
+  const plainTerminal = isPlainTerminal()
   const bgImagePath = createMemo(() => {
     const filename = kv.get("background_image")
     if (!filename || typeof filename !== "string") return undefined
@@ -80,18 +82,34 @@ export function Home() {
 
   return (
     <>
-      <Show when={bgImagePath()} fallback={<StarryBackground meteor={showMeteor} />}>
-        {(p) => <BackgroundImage path={p()} />}
+      <Show when={!plainTerminal}>
+        <Show when={bgImagePath()} fallback={<StarryBackground meteor={showMeteor} />}>
+          {(p) => <BackgroundImage path={p()} />}
+        </Show>
       </Show>
       <box flexGrow={1} alignItems="center" paddingLeft={8} paddingRight={8} zIndex={1}>
         <box flexGrow={1} minHeight={0} />
         <box height={4} minHeight={0} flexShrink={1} />
         <box flexShrink={0}>
-          <TuiPluginRuntime.Slot name="home_logo" mode="replace">
-            <Show when={logoKey()} keyed>
-              {(k) => <Logo shape={logos[k]} sweep />}
-            </Show>
-          </TuiPluginRuntime.Slot>
+          <Show
+            when={plainTerminal}
+            fallback={
+              <TuiPluginRuntime.Slot name="home_logo" mode="replace">
+                <Show when={logoKey()} keyed>
+                  {(k) => <Logo shape={logos[k]} sweep />}
+                </Show>
+              </TuiPluginRuntime.Slot>
+            }
+          >
+            <box flexDirection="column" flexShrink={0}>
+              {logoThin.left.slice(2).map((line, index) => (
+                <box flexDirection="row" gap={1} flexShrink={0}>
+                  <text selectable={false}>{line}</text>
+                  <text selectable={false}>{logoThin.right[index + 2] ?? ""}</text>
+                </box>
+              ))}
+            </box>
+          </Show>
         </box>
         <box height={1} minHeight={0} flexShrink={1} />
         <box
@@ -101,27 +119,47 @@ export function Home() {
           paddingTop={1}
           flexShrink={0}
         >
-          <TuiPluginRuntime.Slot
-            name="home_prompt"
-            mode="replace"
-            workspace_id={project.workspace.current()}
-            ref={bind}
+          <Show
+            when={plainTerminal}
+            fallback={
+              <TuiPluginRuntime.Slot
+                name="home_prompt"
+                mode="replace"
+                workspace_id={project.workspace.current()}
+                ref={bind}
+              >
+                <Prompt
+                  ref={bind}
+                  workspaceID={project.workspace.current()}
+                  right={<TuiPluginRuntime.Slot name="home_prompt_right" workspace_id={project.workspace.current()} />}
+                  placeholders={placeholder}
+                />
+              </TuiPluginRuntime.Slot>
+            }
           >
             <Prompt
               ref={bind}
               workspaceID={project.workspace.current()}
-              right={<TuiPluginRuntime.Slot name="home_prompt_right" workspace_id={project.workspace.current()} />}
               placeholders={placeholder}
             />
-          </TuiPluginRuntime.Slot>
+          </Show>
         </box>
-        <TuiPluginRuntime.Slot name="home_bottom" />
+        <Show when={plainTerminal}>
+          <box paddingTop={1} flexShrink={0}>
+            <text selectable={false}>{t("tui.tips.plain_terminal")}</text>
+          </box>
+        </Show>
+        <Show when={!plainTerminal}>
+          <TuiPluginRuntime.Slot name="home_bottom" />
+        </Show>
         <box flexGrow={1} minHeight={0} />
         <Toast />
       </box>
-      <box width="100%" flexShrink={0}>
-        <TuiPluginRuntime.Slot name="home_footer" mode="single_winner" />
-      </box>
+      <Show when={!plainTerminal}>
+        <box width="100%" flexShrink={0}>
+          <TuiPluginRuntime.Slot name="home_footer" mode="single_winner" />
+        </box>
+      </Show>
     </>
   )
 }

@@ -102,18 +102,17 @@ async function ensureNotesTemplate(notesFile: string): Promise<void> {
 }
 
 // Tail preservation budget (token-budgeted boundary).
-// Modeled on cc-haha's session-memory compact: minimum guarantees the LLM
-// has enough recent-context anchor (avoids the agent-Read-loop failure mode
-// from v4 → v5 spec rationale); maximum is a SOFT ceiling on backward
+// Session-memory compact: minimum guarantees the LLM has enough
+// recent-context anchor (avoids the agent-Read-loop failure mode from
+// v4 → v5 spec rationale); maximum is a SOFT ceiling on backward
 // expansion — i.e. when the natural tail is below the floor we expand
 // backward UP TO maxTokens, but if the natural tail already exceeds
-// maxTokens we leave it alone (matching cc-haha behavior — see
-// calculateMessagesToKeepIndex). Single-message-granularity cap would
+// maxTokens we leave it alone. Single-message-granularity cap would
 // break tool_use/result pairing.
 //
-// 20K is the empirical sweet spot — observed cc compact output is ~20K,
+// 20K is the empirical sweet spot — observed compact output is ~20K,
 // not the 40K nominal default. The 40K appears in source as fallback,
-// but Anthropic's GrowthBook config likely tunes it lower in production.
+// but the upstream config likely tunes it lower in production.
 const TAIL_MIN_TOKENS = 10_000
 const TAIL_MAX_TOKENS = 20_000
 const TAIL_MIN_TEXT_BLOCK_MESSAGES = 5
@@ -124,11 +123,10 @@ const TAIL_MIN_TEXT_BLOCK_MESSAGES = 5
 // After computing the boundary, msgs strictly newer than the boundary
 // survive into the rebuild context. Their tool_use parts are kept (so the
 // LLM still sees what action was taken), but for tools in this whitelist
-// the tool_result content is replaced with a placeholder. Rule mirrors
-// cc-haha COMPACTABLE_TOOLS: result is either large-and-regeneratable
-// (read/bash/grep/glob/webfetch/websearch) or essentially a "done"
-// confirmation (edit/write/multiedit). Tools NOT here carry state the LLM
-// references later (actor/task/question/skill/memory).
+// the tool_result content is replaced with a placeholder. Result is either
+// large-and-regeneratable (read/bash/grep/glob/webfetch/websearch) or
+// essentially a "done" confirmation (edit/write/multiedit). Tools NOT here
+// carry state the LLM references later (actor/task/question/skill/memory).
 const COMPACTABLE_TOOL_NAMES = new Set<string>([
   "read",
   "bash",
@@ -174,7 +172,7 @@ function hasTextBlocks(m: { parts: Array<{ type: string }> }): boolean {
  * everything strictly before this ID is summarized into checkpoint.md and
  * discarded from the rebuild context).
  *
- * Algorithm (mirrors cc-haha calculateMessagesToKeepIndex):
+ * Algorithm (token-budgeted boundary):
  *
  * 1. Start at the last finished assistant index minus 1, take it+successors
  *    as the candidate tail (preserves spec 2 starting point so reasonable
@@ -549,8 +547,8 @@ export const layer: Layer.Layer<
       // carries both use (input) and result (output) on the SAME message, so
       // we project each ToolPart to both a tool_use and a tool_result block —
       // pairing is intrinsically satisfied today and the algorithm acts as a
-      // no-op. Wiring is in place so future cc-haha-style tool_result
-      // extraction (separate user message) will walk the boundary correctly
+      // no-op. Wiring is in place so future tool_result extraction
+      // (separate user message) will walk the boundary correctly
       // without further changes here.
       const candidateID = computeBoundary(msgs)
       const candidateIdx = msgs.findIndex((m) => m.info.id === candidateID)
@@ -1216,7 +1214,7 @@ export const layer: Layer.Layer<
       }
 
       // Section 10: explicit seam framing for LLM continuity post-rebuild.
-      // Modeled on cc-haha's compaction-summary pattern: tells the model
+      // Compaction-summary pattern: tells the model
       // that preserved messages below are real history, not pseudo-content,
       // so it resumes mid-loop instead of asking "what would you like me
       // to do".

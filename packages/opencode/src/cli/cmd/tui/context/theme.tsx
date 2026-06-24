@@ -85,6 +85,41 @@ export type ThemeJson = {
   }
 }
 
+const PLAIN_TERMINAL_THEME: ThemeJson = {
+  ...mimocode,
+  theme: {
+    ...mimocode.theme,
+    text: {
+      dark: "darkStep12",
+      light: "lightStep12",
+    },
+    textMuted: {
+      dark: "darkStep11",
+      light: "lightStep11",
+    },
+    background: "transparent",
+    backgroundPanel: "transparent",
+    backgroundElement: "transparent",
+    backgroundMenu: "transparent",
+    markdownText: {
+      dark: "darkStep12",
+      light: "lightStep12",
+    },
+    markdownHeading: {
+      dark: "darkStep12",
+      light: "lightStep12",
+    },
+    markdownStrong: {
+      dark: "darkStep12",
+      light: "lightStep12",
+    },
+    markdownCodeBlock: {
+      dark: "darkStep12",
+      light: "lightStep12",
+    },
+  },
+}
+
 export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   aura,
   ayu,
@@ -302,7 +337,7 @@ function ansiToRgba(code: number): RGBA {
 
 export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   name: "Theme",
-  init: (props: { mode: "dark" | "light" }) => {
+  init: (props: { mode: "dark" | "light"; plain?: boolean }) => {
     const renderer = useRenderer()
     const config = useTuiConfig()
     const kv = useKV()
@@ -320,13 +355,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         }
         draft.mode = mode
         draft.lock = lock
-        const active = config.theme ?? kv.get("theme", "mimocode")
+        const active = props.plain ? "system" : config.theme ?? kv.get("theme", "mimocode")
         draft.active = typeof active === "string" ? active : "mimocode"
         draft.ready = false
       }),
     )
 
     createEffect(() => {
+      if (props.plain) return
       const theme = config.theme
       if (theme) setStore("active", theme)
     })
@@ -415,6 +451,23 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     })
 
     const values = createMemo(() => {
+      if (props.plain) {
+        const theme = store.themes.system ?? PLAIN_TERMINAL_THEME
+        return resolveTheme(
+          {
+            ...theme,
+            theme: {
+              ...theme.theme,
+              background: "transparent",
+              backgroundPanel: "transparent",
+              backgroundElement: "transparent",
+              backgroundMenu: "transparent",
+            },
+          },
+          store.mode,
+        )
+      }
+
       const active = store.themes[store.active]
       if (active) return resolveTheme(active, store.mode)
 
@@ -468,6 +521,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         pin(mode)
       },
       set(theme: string) {
+        if (props.plain) return false
         if (!hasTheme(theme)) return false
         setStore("active", theme)
         kv.set("theme", theme)

@@ -4,20 +4,16 @@ import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import z from "zod"
+import path from "path"
 import { BusEvent } from "@/bus/bus-event"
 import { Flag } from "../flag/flag"
 import { Log } from "../util"
-
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "./version"
 
 const log = Log.create({ service: "installation" })
 
-// TODO(mimocode): temporary package name and registry, replace when official ones are decided
-const PACKAGE_NAME = "@mimocode/cli-ai"
-const REGISTRY = "https://pkgs.d.xiaomi.net/artifactory/api/npm/npm-snapshot-local"
-// TODO(mimocode): xiaomi registry only publishes to "latest", hardcode until multiple channels are supported
-const CHANNEL = "latest"
+const PACKAGE_NAME = "@mimo-ai/cli"
 
 export type Method = "curl" | "npm" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
@@ -73,7 +69,6 @@ export class UpgradeFailedError extends Schema.TaggedErrorClass<UpgradeFailedErr
   stderr: Schema.String,
 }) {}
 
-// Response schemas for external version APIs
 // TODO(mimocode): uncomment when corresponding channels are supported
 // const GitHubRelease = Schema.Struct({ tag_name: Schema.String })
 const NpmPackage = Schema.Struct({ version: Schema.String })
@@ -147,33 +142,31 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
       //   return "opencode"
       // })
 
-      // TODO(mimocode): uncomment when mimocode has its own install script
-      // const upgradeCurl = Effect.fnUntraced(
-      //   function* (target: string) {
-      //     const response = yield* httpOk.execute(HttpClientRequest.get("https://opencode.ai/install"))
-      //     const body = yield* response.text
-      //     const bodyBytes = new TextEncoder().encode(body)
-      //     const proc = ChildProcess.make("bash", [], {
-      //       stdin: Stream.make(bodyBytes),
-      //       env: { VERSION: target },
-      //       extendEnv: true,
-      //     })
-      //     const handle = yield* spawner.spawn(proc)
-      //     const [stdout, stderr] = yield* Effect.all(
-      //       [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
-      //       { concurrency: 2 },
-      //     )
-      //     const code = yield* handle.exitCode
-      //     return { code, stdout, stderr }
-      //   },
-      //   Effect.scoped,
-      //   Effect.orDie,
-      // )
+      const upgradeCurl = Effect.fnUntraced(
+        function* (target: string) {
+          const response = yield* httpOk.execute(HttpClientRequest.get("https://mimo.xiaomi.com/install"))
+          const body = yield* response.text
+          const bodyBytes = new TextEncoder().encode(body)
+          const proc = ChildProcess.make("bash", [], {
+            stdin: Stream.make(bodyBytes),
+            env: { VERSION: target },
+            extendEnv: true,
+          })
+          const handle = yield* spawner.spawn(proc)
+          const [stdout, stderr] = yield* Effect.all(
+            [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
+            { concurrency: 2 },
+          )
+          const code = yield* handle.exitCode
+          return { code, stdout, stderr }
+        },
+        Effect.scoped,
+        Effect.orDie,
+      )
 
       const methodImpl = Effect.fn("Installation.method")(function* () {
-        // TODO(mimocode): uncomment when mimocode has its own curl install script
-        // if (process.execPath.includes(path.join(".mimocode", "bin"))) return "curl" as Method
-        // if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
+        if (process.execPath.includes(path.join(".mimocode", "bin"))) return "curl" as Method
+        if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
         const exec = process.execPath.toLowerCase()
 
         const checks: Array<{ name: Method; command: () => Effect.Effect<string> }> = [
@@ -225,12 +218,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
         // }
 
         if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
-          // TODO(mimocode): restore dynamic registry detection when official registry is decided
-          // const r = (yield* text(["npm", "config", "get", "registry"])).trim()
-          // const reg = r || "https://registry.npmjs.org"
-          // const registry = reg.endsWith("/") ? reg.slice(0, -1) : reg
+          const r = (yield* text(["npm", "config", "get", "registry"])).trim()
+          const reg = r || "https://registry.npmjs.org"
+          const registry = reg.endsWith("/") ? reg.slice(0, -1) : reg
           const response = yield* httpOk.execute(
-            HttpClientRequest.get(`${REGISTRY}/${encodeURIComponent(PACKAGE_NAME)}/${CHANNEL}`).pipe(HttpClientRequest.acceptJson),
+            HttpClientRequest.get(`${registry}/${encodeURIComponent(PACKAGE_NAME)}/${InstallationChannel}`).pipe(
+              HttpClientRequest.acceptJson,
+            ),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
           return data.version
@@ -273,38 +267,18 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
 
       const upgradeImpl = Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
         let result: { code: ChildProcessSpawner.ExitCode; stdout: string; stderr: string } | undefined
-        // TODO(mimocode): temporary package name and registry, replace when official ones are decided
         switch (m) {
-          // TODO(mimocode): uncomment when mimocode has its own install script
-          // case "curl":
-          //   result = yield* upgradeCurl(target)
-          //   break
+          case "curl":
+            result = yield* upgradeCurl(target)
+            break
           case "npm":
-            result = yield* run([
-              "npm",
-              "install",
-              "-g",
-              `${PACKAGE_NAME}@${target}`,
-              `--registry=${REGISTRY}`,
-            ])
+            result = yield* run(["npm", "install", "-g", `${PACKAGE_NAME}@${target}`])
             break
           case "pnpm":
-            result = yield* run([
-              "pnpm",
-              "install",
-              "-g",
-              `${PACKAGE_NAME}@${target}`,
-              `--registry=${REGISTRY}`,
-            ])
+            result = yield* run(["pnpm", "install", "-g", `${PACKAGE_NAME}@${target}`])
             break
           case "bun":
-            result = yield* run([
-              "bun",
-              "install",
-              "-g",
-              `${PACKAGE_NAME}@${target}`,
-              `--registry=${REGISTRY}`,
-            ])
+            result = yield* run(["bun", "install", "-g", `${PACKAGE_NAME}@${target}`])
             break
           // TODO(mimocode): uncomment when mimocode is published to homebrew
           // case "brew": {

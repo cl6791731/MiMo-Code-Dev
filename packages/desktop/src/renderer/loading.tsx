@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onMount } from "soli
 import type { InitStep, SqliteMigrationProgress } from "../preload/types"
 
 const root = document.getElementById("root")!
-const lines = ["Getting ready...", "Migrating your database", "This may take a couple of minutes"]
+const lines = ["Just a moment...", "Migrating your database", "This may take a couple of minutes"]
 const delays = [3000, 9000]
 
 render(() => {
@@ -56,7 +56,7 @@ render(() => {
   const status = createMemo(() => {
     if (phase() === "done") return "All done"
     if (phase() === "sqlite_waiting") return lines[line()]
-    return "Getting ready..."
+    return "Just a moment..."
   })
 
   return (

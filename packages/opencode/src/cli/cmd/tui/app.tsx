@@ -67,22 +67,34 @@ import { TuiConfigProvider, useTuiConfig } from "./context/tui-config"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { createTuiApi, TuiPluginRuntime, type RouteMap } from "./plugin"
 import { FormatError, FormatUnknownError } from "@/cli/error"
+import { isPlainTerminal } from "./util/terminal"
 
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
 
-function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
-  const mouseEnabled = !Flag.MIMOCODE_DISABLE_MOUSE && (_config.mouse ?? true)
+function rendererConfig(_config: TuiConfig.Info, plainTerminal: boolean): CliRendererConfig {
+  const mouseEnabled = !plainTerminal && !Flag.MIMOCODE_DISABLE_MOUSE && (_config.mouse ?? true)
 
   return {
     externalOutputMode: "passthrough",
-    targetFps: 60,
+    targetFps: plainTerminal ? 10 : 60,
     gatherStats: false,
     exitOnCtrlC: false,
-    useKittyKeyboard: {},
+    useKittyKeyboard: plainTerminal ? null : {},
     autoFocus: false,
     openConsoleOnError: false,
+    enableMouseMovement: mouseEnabled,
     useMouse: mouseEnabled,
+    ...(plainTerminal
+      ? {
+          maxFps: 15,
+          screenMode: "main-screen" as const,
+          useThread: false,
+          backgroundColor: "transparent",
+        }
+      : {
+          maxFps: 60,
+        }),
     consoleOptions: {
       keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
       onCopySelection: (text) => {
@@ -136,7 +148,8 @@ export function tui(input: {
       await TuiPluginRuntime.dispose()
     }
 
-    const renderer = await createCliRenderer(rendererConfig(input.config))
+    const plainTerminal = isPlainTerminal()
+    const renderer = await createCliRenderer(rendererConfig(input.config, plainTerminal))
     // 默认使用 dark 模式(不跟随终端背景);用户手动切换后会被 theme_mode_lock 记住并优先。
     const mode = "dark"
 
@@ -173,7 +186,7 @@ export function tui(input: {
                       >
                         <ProjectProvider>
                           <SyncProvider>
-                            <ThemeProvider mode={mode}>
+                            <ThemeProvider mode={mode} plain={plainTerminal}>
                               <LocalProvider>
                                 <KeybindProvider>
                                   <PromptStashProvider>
@@ -211,6 +224,7 @@ export function tui(input: {
 
 function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const tuiConfig = useTuiConfig()
+  const plainTerminal = isPlainTerminal()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
@@ -1070,7 +1084,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     <box
       width={dimensions().width}
       height={dimensions().height}
-      backgroundColor={theme.background}
+      backgroundColor={plainTerminal ? undefined : theme.background}
       onMouseDown={(evt) => {
         if (evt.button !== MouseButton.RIGHT) return
 

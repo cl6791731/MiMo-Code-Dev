@@ -39,6 +39,7 @@ export const dict = {
 
   // Tips
   "tui.tips.label": "Подсказка",
+  "tui.tips.plain_terminal": "Рекомендуем использовать iTerm или терминал VS Code",
   "tui.tips.attach_file":
     "Введите {highlight}@{/highlight}, а затем имя файла, чтобы выполнить нечёткий поиск и прикрепить файлы",
   "tui.tips.shell_prefix":

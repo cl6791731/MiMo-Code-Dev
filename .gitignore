@@ -41,17 +41,3 @@ tsconfig.tsbuildinfo
 experiment/*.log
 experiment/last-outcome.json
 /experiment
-
-# Build artifacts
-out/
-*.app
-*.dmg
-*.zip
-*.blockmap
-
-# Bun
-.bun/
-
-# Temp files
-.tmp/
-*.tmp

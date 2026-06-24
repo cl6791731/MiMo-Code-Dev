@@ -39,6 +39,7 @@ export const dict = {
 
   // Tips
   "tui.tips.label": "提示",
+  "tui.tips.plain_terminal": "推荐使用iTerm或vscode终端",
   "tui.tips.attach_file": "输入 {highlight}@{/highlight} 后接文件名以模糊搜索并附加文件",
   "tui.tips.shell_prefix": "以 {highlight}!{/highlight} 开头可直接运行 shell 命令（例如 {highlight}!ls -la{/highlight}）",
   "tui.tips.tab_agent":

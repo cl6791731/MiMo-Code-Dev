@@ -206,7 +206,7 @@ Next: implement renderRebuildContext 9-section render in src/session/checkpoint.
     ),
   )
 
-  it.live("renderRebuildContext appends cc-haha-style seam framing", () =>
+  it.live("renderRebuildContext appends seam framing", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const cp = yield* SessionCheckpoint.Service

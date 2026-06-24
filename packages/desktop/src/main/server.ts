@@ -1,7 +1,4 @@
 import { app } from "electron"
-import { execFile, spawn } from "node:child_process"
-import { existsSync } from "node:fs"
-import { join } from "node:path"
 import { DEFAULT_SERVER_URL_KEY, WSL_ENABLED_KEY } from "./constants"
 import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
@@ -33,62 +30,16 @@ export function setWslConfig(config: WslConfig) {
   getStore().set(WSL_ENABLED_KEY, config.enabled)
 }
 
-// Find the compiled binary
-function findBinary(): string | null {
-  const possiblePaths = [
-    // Packaged mode: binary in app bundle Resources
-    join(process.resourcesPath, "bin/mimo"),
-    // Dev mode: binary built in packages/opencode/dist
-    join(process.cwd(), "../opencode/dist/mimocode-darwin-arm64/bin/mimo"),
-    join(process.cwd(), "../opencode/dist/mimocode-darwin-x64/bin/mimo"),
-    // Absolute path fallback
-    "/Users/vv/Desktop/MiMo-Code-0.1.0/packages/opencode/dist/mimocode-darwin-arm64/bin/mimo",
-  ]
-
-  for (const p of possiblePaths) {
-    if (existsSync(p)) {
-      console.log("[MiMo Code] Found binary at:", p)
-      return p
-    }
-  }
-  console.log("[MiMo Code] Searched paths:", possiblePaths)
-  return null
-}
-
 export async function spawnLocalServer(hostname: string, port: number, password: string) {
   prepareServerEnv(password)
-
-  const binaryPath = findBinary()
-  if (!binaryPath) {
-    throw new Error("MiMo Code binary not found. Please build the opencode package first.")
-  }
-
-  console.log("[MiMo Code] Using binary:", binaryPath)
-
-  // Spawn the binary as a sidecar process
-  const child = spawn(binaryPath, ["serve", "--port", String(port), "--hostname", hostname, "--print-logs"], {
-    env: {
-      ...process.env,
-      OPENCODE_SERVER_USERNAME: "mimocode",
-      OPENCODE_SERVER_PASSWORD: password,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-
-  child.stdout?.on("data", (data: Buffer) => {
-    console.log("[MiMo Code Server]", data.toString().trim())
-  })
-
-  child.stderr?.on("data", (data: Buffer) => {
-    console.error("[MiMo Code Server]", data.toString().trim())
-  })
-
-  child.on("error", (err) => {
-    console.error("[MiMo Code] Failed to start server:", err)
-  })
-
-  child.on("exit", (code) => {
-    console.log("[MiMo Code] Server exited with code:", code)
+  const { Log, Server } = await import("virtual:opencode-server")
+  await Log.init({ level: "WARN" })
+  const listener = await Server.listen({
+    port,
+    hostname,
+    username: "opencode",
+    password,
+    cors: ["oc://renderer"],
   })
 
   const wait = (async () => {
@@ -104,14 +55,7 @@ export async function spawnLocalServer(hostname: string, port: number, password:
     await ready()
   })()
 
-  return {
-    listener: {
-      stop: () => {
-        child.kill()
-      },
-    } as any,
-    health: { wait },
-  }
+  return { listener, health: { wait } }
 }
 
 function prepareServerEnv(password: string) {
@@ -123,7 +67,7 @@ function prepareServerEnv(password: string) {
     OPENCODE_EXPERIMENTAL_ICON_DISCOVERY: "true",
     OPENCODE_EXPERIMENTAL_FILEWATCHER: "true",
     OPENCODE_CLIENT: "desktop",
-    OPENCODE_SERVER_USERNAME: "mimocode",
+    OPENCODE_SERVER_USERNAME: "opencode",
     OPENCODE_SERVER_PASSWORD: password,
     XDG_STATE_HOME: app.getPath("userData"),
   }
@@ -140,7 +84,7 @@ export async function checkHealth(url: string, password?: string | null): Promis
 
   const headers = new Headers()
   if (password) {
-    const auth = Buffer.from(`mimocode:${password}`).toString("base64")
+    const auth = Buffer.from(`opencode:${password}`).toString("base64")
     headers.set("authorization", `Basic ${auth}`)
   }
 

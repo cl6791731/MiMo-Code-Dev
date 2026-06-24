@@ -65,8 +65,8 @@ export function setDockIcon() {
 
 export function createMainWindow() {
   const state = windowState({
-    defaultWidth: 1440,
-    defaultHeight: 900,
+    defaultWidth: 1280,
+    defaultHeight: 800,
   })
 
   const mode = tone()
@@ -75,19 +75,14 @@ export function createMainWindow() {
     y: state.y,
     width: state.width,
     height: state.height,
-    minWidth: 800,
-    minHeight: 600,
     show: false,
-    title: "MiMo Code",
+    title: "MiMoCode",
     icon: iconPath(),
     backgroundColor,
     ...(process.platform === "darwin"
       ? {
           titleBarStyle: "hidden" as const,
-          trafficLightPosition: { x: 12, y: 12 },
-          vibrancy: "under-window",
-          visualEffectState: "active",
-          transparent: false,
+          trafficLightPosition: { x: 12, y: 14 },
         }
       : {}),
     ...(process.platform === "win32"
@@ -123,20 +118,7 @@ export function createMainWindow() {
   wireZoom(win)
 
   win.once("ready-to-show", () => {
-    console.log("[MiMo Code] Window ready to show")
     win.show()
-  })
-
-  win.webContents.on("did-finish-load", () => {
-    console.log("[MiMo Code] Renderer loaded successfully")
-  })
-
-  win.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
-    console.error("[MiMo Code] Renderer failed to load:", errorCode, errorDescription)
-  })
-
-  win.webContents.on("console-message", (event, level, message) => {
-    console.log("[MiMo Code Renderer]", message)
   })
 
   return win
