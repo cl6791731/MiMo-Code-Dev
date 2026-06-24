@@ -35,6 +35,7 @@ export const dict: Record<string, string> = {
 
   // Tips
   "tui.tips.label": "Tip",
+  "tui.tips.plain_terminal": "We recommend using iTerm or the VS Code terminal",
   "tui.tips.attach_file": "Type {highlight}@{/highlight} followed by a filename to fuzzy search and attach files",
   "tui.tips.shell_prefix":
     "Start a message with {highlight}!{/highlight} to run shell commands directly (e.g., {highlight}!ls -la{/highlight})",

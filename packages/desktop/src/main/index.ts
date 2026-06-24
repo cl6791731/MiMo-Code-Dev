@@ -1,15 +1,5 @@
-console.log("[MiMo Code] Main process starting...")
-
-process.on("uncaughtException", (error) => {
-  console.error("[MiMo Code] Uncaught exception:", error)
-})
-process.on("unhandledRejection", (reason) => {
-  console.error("[MiMo Code] Unhandled rejection:", reason)
-})
-
+import "./bun-polyfill"
 import { randomUUID } from "node:crypto"
-console.log("[MiMo Code] Imports loaded")
-
 import { EventEmitter } from "node:events"
 import { existsSync } from "node:fs"
 import { createServer } from "node:net"
@@ -30,17 +20,17 @@ try {
 process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
 const APP_NAMES: Record<string, string> = {
-  dev: "MiMo Code Dev",
-  beta: "MiMo Code Beta",
-  prod: "MiMo Code",
+  dev: "MiMoCode Dev",
+  beta: "MiMoCode Beta",
+  prod: "MiMoCode",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.mimocode.desktop.dev",
-  beta: "ai.mimocode.desktop.beta",
-  prod: "ai.mimocode.desktop",
+  dev: "ai.opencode.desktop.dev",
+  beta: "ai.opencode.desktop.beta",
+  prod: "ai.opencode.desktop",
 }
-const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.mimocode.desktop.dev"
-app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "MiMo Code Dev")
+const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
+app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "MiMoCode Dev")
 app.setAppUserModelId(appId)
 app.setPath("userData", join(app.getPath("appData"), appId))
 const { autoUpdater } = pkg
@@ -60,7 +50,8 @@ import {
   setBackgroundColor,
   setDockIcon,
 } from "./windows"
-import type { Server } from "../../opencode/dist/types/src/node"
+import { drizzle } from "drizzle-orm/node-sqlite/driver"
+import type { Server } from "virtual:opencode-server"
 
 const initEmitter = new EventEmitter()
 let initStep: InitStep = { phase: "server_waiting" }
@@ -85,16 +76,13 @@ function setupApp() {
   ensureLoopbackNoProxy()
   app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>")
 
-  // In dev mode, skip single-instance lock to avoid conflicts
-  if (!app.isPackaged) {
-    console.log("[MiMo Code] Dev mode - skipping single instance lock")
-  } else if (!app.requestSingleInstanceLock()) {
+  if (!app.requestSingleInstanceLock()) {
     app.quit()
     return
   }
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
-    const urls = argv.filter((arg: string) => arg.startsWith("mimocode://"))
+    const urls = argv.filter((arg: string) => arg.startsWith("opencode://"))
     if (urls.length) {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
@@ -124,24 +112,11 @@ function setupApp() {
   }
 
   void app.whenReady().then(async () => {
-    app.setAsDefaultProtocolClient("mimocode")
+    app.setAsDefaultProtocolClient("opencode")
     registerRendererProtocol()
     setDockIcon()
     setupAutoUpdater()
-    try {
-      await initialize()
-    } catch (error) {
-      console.error("[MiMo Code] Initialization failed:", error)
-      // Still create the window even if server fails
-      if (!mainWindow) {
-        mainWindow = createMainWindow()
-        wireMenu()
-      }
-    }
-  }).catch((error) => {
-    console.error("[MiMo Code] App ready failed:", error)
-    dialog.showErrorBox("MiMo Code - Startup Error", `Failed to start: ${error.message}`)
-    app.quit()
+    await initialize()
   })
 }
 
@@ -175,7 +150,6 @@ async function initialize() {
 
   const loadingTask = (async () => {
     logger.log("sidecar connection started", { url })
-    console.log("[MiMo Code] Sidecar connection started:", url)
 
     initEmitter.on("sqlite", (progress: SqliteMigrationProgress) => {
       setInitStep({ phase: "sqlite_waiting" })
@@ -185,10 +159,15 @@ async function initialize() {
     })
 
     if (needsMigration) {
-      // Database migration is handled by the sidecar binary
-      // Just skip to done
-      console.log("[MiMo Code] Database migration will be handled by the sidecar binary")
+      const { Database, JsonMigration } = await import("virtual:opencode-server")
+      await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
+        progress: (event: { current: number; total: number }) => {
+          const percent = Math.round(event.current / event.total) * 100
+          initEmitter.emit("sqlite", { type: "InProgress", value: percent })
+        },
+      })
       initEmitter.emit("sqlite", { type: "Done" })
+
       sqliteDone?.resolve()
     }
 
@@ -197,34 +176,22 @@ async function initialize() {
     }
 
     logger.log("spawning sidecar", { url })
-    console.log("[MiMo Code] Spawning sidecar server...")
-    try {
-      const { listener, health } = await spawnLocalServer(hostname, port, password)
-      server = listener
-      serverReady.resolve({
-        url,
-        username: "mimocode",
-        password,
-      })
-      console.log("[MiMo Code] Sidecar server started successfully")
+    const { listener, health } = await spawnLocalServer(hostname, port, password)
+    server = listener
+    serverReady.resolve({
+      url,
+      username: "opencode",
+      password,
+    })
 
-      await Promise.race([
-        health.wait,
-        delay(30_000).then(() => {
-          throw new Error("Sidecar health check timed out")
-        }),
-      ]).catch((error) => {
-        logger.error("sidecar health check failed", error)
-      })
-    } catch (error) {
-      console.error("[MiMo Code] Failed to spawn sidecar:", error)
-      // Resolve with empty values so the app can still show
-      serverReady.resolve({
-        url,
-        username: null,
-        password: null,
-      })
-    }
+    await Promise.race([
+      health.wait,
+      delay(30_000).then(() => {
+        throw new Error("Sidecar health check timed out")
+      }),
+    ]).catch((error) => {
+      logger.error("sidecar health check failed", error)
+    })
 
     logger.log("loading task finished")
   })()
@@ -239,16 +206,13 @@ async function initialize() {
 
   await loadingTask
   setInitStep({ phase: "done" })
-  console.log("[MiMo Code] Loading task completed")
 
   if (overlay) {
     await loadingComplete.promise
   }
 
-  console.log("[MiMo Code] Creating main window...")
   mainWindow = createMainWindow()
   wireMenu()
-  console.log("[MiMo Code] Main window created")
 
   overlay?.close()
 }

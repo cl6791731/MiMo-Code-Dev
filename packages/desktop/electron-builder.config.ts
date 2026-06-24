@@ -35,8 +35,9 @@ const getBase = (): Configuration => ({
   files: ["out/**/*", "resources/**/*"],
   extraResources: [
     {
-      from: "../opencode/dist/mimocode-darwin-arm64/bin/mimo",
-      to: "bin/mimo",
+      from: "native/",
+      to: "native/",
+      filter: ["index.js", "index.d.ts", "build/Release/mac_window.node", "swift-build/**"],
     },
   ],
   mac: {
@@ -47,27 +48,14 @@ const getBase = (): Configuration => ({
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
     notarize: true,
-    target: [
-      {
-        target: "dmg",
-        arch: ["x64", "arm64"],
-      },
-      {
-        target: "zip",
-        arch: ["x64", "arm64"],
-      },
-    ],
+    target: ["dmg", "zip"],
   },
   dmg: {
     sign: true,
-    contents: [
-      { x: 130, y: 220 },
-      { x: 410, y: 220, type: "link", path: "/Applications" },
-    ],
   },
   protocols: {
-    name: "MiMo Code",
-    schemes: ["mimocode"],
+    name: "OpenCode",
+    schemes: ["opencode"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -97,7 +85,7 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.mimocode.desktop.dev",
-        productName: "MiMo Code Dev",
+        productName: "MiMoCode Dev",
         rpm: { packageName: "mimocode-dev" },
       }
     }
@@ -105,9 +93,9 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.mimocode.desktop.beta",
-        productName: "MiMo Code Beta",
-        protocols: { name: "MiMo Code Beta", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
+        productName: "MiMoCode Beta",
+        protocols: { name: "MiMoCode Beta", schemes: ["mimocode"] },
+        publish: { provider: "github", owner: "XiaomiMiMo", repo: "MiMo-Code-beta", channel: "latest" },
         rpm: { packageName: "mimocode-beta" },
       }
     }
@@ -115,10 +103,10 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.mimocode.desktop",
-        productName: "MiMo Code Dev",
-        protocols: { name: "MiMo Code", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
-        rpm: { packageName: "mimocode-dev" },
+        productName: "MiMoCode",
+        protocols: { name: "MiMoCode", schemes: ["mimocode"] },
+        publish: { provider: "github", owner: "XiaomiMiMo", repo: "MiMo-Code", channel: "latest" },
+        rpm: { packageName: "mimocode" },
       }
     }
   }

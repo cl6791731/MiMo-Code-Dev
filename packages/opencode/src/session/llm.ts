@@ -59,7 +59,7 @@ export function isTransientCapacityError(error: unknown): boolean {
 }
 
 /**
- * Persistent-retry schedule, mirroring cc-haha PERSISTENT_MAX_BACKOFF_MS.
+ * Persistent-retry schedule with exponential backoff.
  *
  * Exponential backoff 500ms × 2 (i.e. 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256s),
  * each individual delay capped at 5 minutes, total attempts capped at 10.

@@ -27,7 +27,7 @@ const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
   if (env.OPENCODE_BUMP) return "latest"
   if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
-  return await $`git branch --show-current`.text().then((x) => x.trim())
+  return await $`git branch --show-current`.text().then((x) => x.trim()) || "latest"
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
@@ -37,22 +37,13 @@ const VERSION = await (async () => {
   const version = await Bun.file(path.resolve(import.meta.dir, "../../opencode/package.json"))
     .json()
     .then((data: any) => data.version)
-  const [major, minor, patch] = version.split(".").map((x: string) => Number(x) || 0)
   const t = env.OPENCODE_BUMP?.toLowerCase()
+  if (!t) return version
+  const [major, minor, patch] = version.split(".").map((x: string) => Number(x) || 0)
   if (t === "major") return `${major + 1}.0.0`
   if (t === "minor") return `${major}.${minor + 1}.0`
   return `${major}.${minor}.${patch + 1}`
 })()
-
-const bot = ["actions-user", "opencode", "opencode-agent[bot]"]
-const teamPath = path.resolve(import.meta.dir, "../../../.github/TEAM_MEMBERS")
-const team = [
-  ...(await Bun.file(teamPath)
-    .text()
-    .then((x) => x.split(/\r?\n/).map((x) => x.trim()))
-    .then((x) => x.filter((x) => x && !x.startsWith("#")))),
-  ...bot,
-]
 
 export const Script = {
   get channel() {
@@ -66,9 +57,6 @@ export const Script = {
   },
   get release(): boolean {
     return !!env.OPENCODE_RELEASE
-  },
-  get team() {
-    return team
   },
 }
 console.log(`opencode script`, JSON.stringify(Script, null, 2))

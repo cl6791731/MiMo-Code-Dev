@@ -5,14 +5,10 @@ import { getMimeType } from "hono/utils/mime"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 
-// In Electron desktop mode, the web UI is served by the renderer process
-// so we skip the embedded web UI import to avoid path resolution issues
-const embeddedUIPromise: Promise<Record<string, string> | null> =
-  process.env.MIMOCODE_DISABLE_EMBEDDED_WEB_UI === "true" ||
-  process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI === "true"
-    ? Promise.resolve(null)
-    : // @ts-expect-error - generated file at build time
-      import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null)
+const embeddedUIPromise = Flag.MIMOCODE_DISABLE_EMBEDDED_WEB_UI
+  ? Promise.resolve(null)
+  : // @ts-expect-error - generated file at build time
+    import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null)
 
 const DEFAULT_CSP =
   "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:"

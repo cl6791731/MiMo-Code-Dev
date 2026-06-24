@@ -23,12 +23,12 @@ function tauriDir(id: string) {
 
 // The Tauri app identifier changes between dev/beta/prod builds.
 const TAURI_APP_IDS: Record<string, string> = {
-  dev: "ai.mimocode.desktop.dev",
-  beta: "ai.mimocode.desktop.beta",
-  prod: "ai.mimocode.desktop",
+  dev: "ai.opencode.desktop.dev",
+  beta: "ai.opencode.desktop.beta",
+  prod: "ai.opencode.desktop",
 }
 function tauriAppId() {
-  return app.isPackaged ? TAURI_APP_IDS[CHANNEL] : "ai.mimocode.desktop.dev"
+  return app.isPackaged ? TAURI_APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
 }
 
 // Migrate a single Tauri .dat file into the corresponding electron-store.
@@ -48,7 +48,7 @@ function migrateFile(datPath: string, filename: string) {
   // opencode.settings.dat → the electron settings store ("opencode.settings").
   // All other .dat files keep their full filename as the store name so they match
   // what the renderer passes via IPC (e.g. "default.dat", "opencode.global.dat").
-  const storeName = filename === "opencode.settings.dat" ? "mimocode.settings" : filename
+  const storeName = filename === "opencode.settings.dat" ? "opencode.settings" : filename
   const target = getStore(storeName)
   const migrated: string[] = []
   const skipped: string[] = []

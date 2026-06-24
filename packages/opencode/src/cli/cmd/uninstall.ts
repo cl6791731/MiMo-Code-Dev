@@ -129,11 +129,10 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
   }
 
   if (method !== "curl" && method !== "unknown") {
-    // TODO(mimocode): temporary package name, update when official name is decided
     const cmds: Record<string, string> = {
-      npm: "npm uninstall -g @mimocode/cli-ai",
-      pnpm: "pnpm uninstall -g @mimocode/cli-ai",
-      bun: "bun remove -g @mimocode/cli-ai",
+      npm: "npm uninstall -g @mimo-ai/cli",
+      pnpm: "pnpm uninstall -g @mimo-ai/cli",
+      bun: "bun remove -g @mimo-ai/cli",
       // TODO(mimocode): uncomment when published to these channels
       // brew: "brew uninstall mimocode",
       // choco: "choco uninstall mimocode",
@@ -181,11 +180,10 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
   }
 
   if (method !== "curl" && method !== "unknown") {
-    // TODO(mimocode): temporary package name, update when official name is decided
     const cmds: Record<string, string[]> = {
-      npm: ["npm", "uninstall", "-g", "@mimocode/cli-ai"],
-      pnpm: ["pnpm", "uninstall", "-g", "@mimocode/cli-ai"],
-      bun: ["bun", "remove", "-g", "@mimocode/cli-ai"],
+      npm: ["npm", "uninstall", "-g", "@mimo-ai/cli"],
+      pnpm: ["pnpm", "uninstall", "-g", "@mimo-ai/cli"],
+      bun: ["bun", "remove", "-g", "@mimo-ai/cli"],
       // TODO(mimocode): uncomment when published to these channels
       // brew: ["brew", "uninstall", "mimocode"],
       // choco: ["choco", "uninstall", "mimocode"],

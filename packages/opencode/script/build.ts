@@ -253,45 +253,6 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
-// Build node.js module for electron-vite (dist/node/)
-if (singleFlag) {
-  console.log("Building node.js module for electron-vite...")
-  const nodeOutput = "dist/node"
-  await $`mkdir -p ${nodeOutput}`
-
-  const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
-  const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
-  const nodeParserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
-  const nodeWorkerPath = "./src/cli/cmd/tui/worker.ts"
-  const nodeWorkerRelativePath = path.relative(dir, nodeParserWorker).replaceAll("\\", "/")
-
-  const result = await Bun.build({
-    target: "bun",
-    tsconfig: "./tsconfig.json",
-    plugins: [plugin],
-    format: "esm",
-    minify: false,
-    splitting: true,
-    entrypoints: ["./src/node.ts"],
-    outdir: nodeOutput,
-    define: {
-      OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_MIGRATIONS: JSON.stringify(migrations),
-      OTUI_TREE_SITTER_WORKER_PATH: "/$bunfs/root/" + nodeWorkerRelativePath,
-      OPENCODE_WORKER_PATH: nodeWorkerPath,
-      OPENCODE_CHANNEL: `'${Script.channel}'`,
-      OPENCODE_LIBC: `'glibc'`,
-      "process.env.MIMOCODE_DISABLE_EMBEDDED_WEB_UI": `"true"`,
-    },
-  })
-  if (!result.success) {
-    console.error("Node.js module build failed:")
-    for (const msg of result.logs) console.error(msg)
-  } else {
-    console.log(`Node.js module built to ${nodeOutput}`)
-  }
-}
-
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {

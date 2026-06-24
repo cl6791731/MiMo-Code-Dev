@@ -39,6 +39,7 @@ export const dict = {
 
   // Tips
   "tui.tips.label": "ヒント",
+  "tui.tips.plain_terminal": "iTerm または VS Code ターミナルの使用をおすすめします",
   "tui.tips.attach_file": "{highlight}@{/highlight} の後にファイル名を入力するとファジー検索でファイルを添付できます",
   "tui.tips.shell_prefix":
     "メッセージを {highlight}!{/highlight} で始めるとシェルコマンドを直接実行できます（例：{highlight}!ls -la{/highlight}）",

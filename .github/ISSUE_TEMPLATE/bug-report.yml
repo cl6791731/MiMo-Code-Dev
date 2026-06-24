@@ -20,10 +20,10 @@ body:
       required: false
 
   - type: input
-    id: mimocode-version
+    id: opencode-version
     attributes:
-      label: MiMo Code version
-      description: What version of MiMo Code are you using?
+      label: OpenCode version
+      description: What version of OpenCode are you using?
     validations:
       required: false
 
