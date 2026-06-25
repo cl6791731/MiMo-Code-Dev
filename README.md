@@ -1,7 +1,7 @@
 <h1 align="center">MiMo Code Dev</h1>
 
 <p align="center">
-  <img src="assets/readme/mimocode-banner.jpg" alt="MiMo Code Desktop" width="700">
+  <img src="assets/readme/mimocode-banner.jpg" alt="MiMo Code Dev" width="700">
 </p>
 
 <p align="center"><strong>基于 MiMo Code 的 macOS 桌面端应用。</strong></p>
