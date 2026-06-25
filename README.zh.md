@@ -1,18 +1,12 @@
 <h1 align="center">MiMoCode</h1>
 
 <p align="center">
-  <img src="assets/readme/mimocode-banner.png" alt="MiMoCode" width="700">
+  <img src="assets/readme/mimocode-banner.jpg" alt="MiMoCode" width="700">
 </p>
 
 <p align="center"><strong>开源 AI 编程智能体，拥有跨会话记忆。</strong></p>
 
-<p align="center">
-  中文 | <a href="README.md">English</a>
-</p>
-
-<p align="center">
-  <a href="https://mimo.xiaomi.com/zh/mimocode">官网</a> | <a href="https://mimo.xiaomi.com/zh/blog/mimo-code-long-horizon">博客</a>
-</p>
+<p align="center">由小米 MiMo 团队基于 <a href="https://github.com/XiaomiMiMo/MiMo-Code">OpenCode</a> 构建。</p>
 
 ---
 
@@ -122,7 +116,7 @@ bun turbo typecheck      # 类型检查
 
 ## 与 OpenCode 的关系
 
-MiMoCode 基于 [OpenCode](https://github.com/anomalyco/opencode) fork 构建，保留其全部核心能力（多 Provider、TUI、LSP、MCP、插件），并在此基础上构建了持久化记忆、智能上下文管理、子智能体编排、目标驱动的自主循环、Compose 工作流，以及通过 dream/distill 实现的自我进化。
+MiMoCode 基于 [OpenCode](https://github.com/XiaomiMiMo/MiMo-Code) fork 构建，保留其全部核心能力（多 Provider、TUI、LSP、MCP、插件），并在此基础上构建了持久化记忆、智能上下文管理、子智能体编排、目标驱动的自主循环、Compose 工作流，以及通过 dream/distill 实现的自我进化。
 
 ---
 
@@ -131,9 +125,7 @@ MiMoCode 基于 [OpenCode](https://github.com/anomalyco/opencode) fork 构建，
 扫描二维码加入社区群聊：
 
 <p align="center">
-  <img src="assets/readme/community-qrcode-1.jpg" alt="社区群聊二维码 1" width="240">
-  &nbsp;&nbsp;
-  <img src="assets/readme/community-qrcode-2.jpg" alt="社区群聊二维码 2" width="240">
+  <img src="assets/readme/community-qrcode.jpg" alt="社区群聊二维码" width="240">
 </p>
 
 ---
