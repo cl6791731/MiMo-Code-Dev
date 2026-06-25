@@ -1,18 +1,12 @@
 <h1 align="center">MiMoCode</h1>
 
 <p align="center">
-  <img src="assets/readme/mimocode-banner.png" alt="MiMoCode" width="700">
+  <img src="assets/readme/mimocode-banner.jpg" alt="MiMoCode" width="700">
 </p>
 
 <p align="center"><strong>An open-source AI coding agent with cross-session memory.</strong></p>
 
-<p align="center">
-  <a href="README.zh.md">中文</a> | English
-</p>
-
-<p align="center">
-  <a href="https://mimo.xiaomi.com/en/mimocode">Website</a> | <a href="https://mimo.xiaomi.com/en/blog/mimo-code-long-horizon">Blog</a>
-</p>
+<p align="center">Built by Xiaomi's MiMo team on top of <a href="https://github.com/XiaomiMiMo/MiMo-Code">OpenCode</a>.</p>
 
 ---
 
@@ -122,7 +116,7 @@ bun turbo typecheck      # Type check
 
 ## Relationship to OpenCode
 
-MiMoCode is built as a fork of [OpenCode](https://github.com/anomalyco/opencode). It keeps all core OpenCode capabilities (multiple providers, TUI, LSP, MCP, plugins) and adds persistent memory, intelligent context management, subagent orchestration, goal-driven autonomous loops, compose workflows, and self-improvement via dream/distill.
+MiMoCode is built as a fork of [OpenCode](https://github.com/XiaomiMiMo/MiMo-Code). It keeps all core OpenCode capabilities (multiple providers, TUI, LSP, MCP, plugins) and adds persistent memory, intelligent context management, subagent orchestration, goal-driven autonomous loops, compose workflows, and self-improvement via dream/distill.
 
 ---
 
@@ -131,9 +125,7 @@ MiMoCode is built as a fork of [OpenCode](https://github.com/anomalyco/opencode)
 Scan the QR code to join the community group chat:
 
 <p align="center">
-  <img src="assets/readme/community-qrcode-1.jpg" alt="Community group chat QR code 1" width="240">
-  &nbsp;&nbsp;
-  <img src="assets/readme/community-qrcode-2.jpg" alt="Community group chat QR code 2" width="240">
+  <img src="assets/readme/community-qrcode.jpg" alt="Community group chat QR code" width="240">
 </p>
 
 ---
