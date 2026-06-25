@@ -25,11 +25,11 @@ const APP_NAMES: Record<string, string> = {
   prod: "MiMoCode",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
+  dev: "ai.mimocode.desktop.dev",
+  beta: "ai.mimocode.desktop.beta",
+  prod: "ai.mimocode.desktop",
 }
-const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
+const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.mimocode.desktop.dev"
 app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "MiMoCode Dev")
 app.setAppUserModelId(appId)
 app.setPath("userData", join(app.getPath("appData"), appId))
@@ -82,7 +82,7 @@ function setupApp() {
   }
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
-    const urls = argv.filter((arg: string) => arg.startsWith("opencode://"))
+    const urls = argv.filter((arg: string) => arg.startsWith("mimocode://"))
     if (urls.length) {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
@@ -112,7 +112,7 @@ function setupApp() {
   }
 
   void app.whenReady().then(async () => {
-    app.setAsDefaultProtocolClient("opencode")
+    app.setAsDefaultProtocolClient("mimocode")
     registerRendererProtocol()
     setDockIcon()
     setupAutoUpdater()

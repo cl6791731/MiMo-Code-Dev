@@ -54,8 +54,8 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
-    schemes: ["opencode"],
+    name: "MiMoCode",
+    schemes: ["mimocode"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
