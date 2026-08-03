@@ -9,7 +9,7 @@ export type WslConfig = { enabled: boolean }
 export type HealthCheck = { wait: Promise<void> }
 
 // Loads the bundled opencode server at runtime (externalized from the main
-// bundle to avoid rollup choking on the 22MB single-file bundle).
+// bundle to avoid esbuild failing on the 22MB single-file bundle).
 export const serverModule = () =>
   import(/* @vite-ignore */ fileURLToPath(new URL("./chunks/opencode-server.js", import.meta.url)))
 

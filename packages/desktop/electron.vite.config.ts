@@ -35,14 +35,11 @@ export default defineConfig({
         name: "opencode:virtual-server-module",
         enforce: "pre",
         resolveId(id) {
-          // Externalize the bundled opencode server: rollup chokes on the
-          // 22MB single-file bundle (unterminated string in generated chunk),
-          // so we copy it as a runtime asset and load it dynamically instead.
+          // Load the bundled opencode server at runtime instead of letting
+          // rollup bundle the 22MB single-file module (esbuild transform of
+          // the merged bundle fails with "Unterminated string literal").
           if (id === "virtual:opencode-server") {
-            return {
-              id: "opencode-server-runtime",
-              external: true,
-            }
+            return { id: "opencode-server-runtime", external: true }
           }
         },
       },
