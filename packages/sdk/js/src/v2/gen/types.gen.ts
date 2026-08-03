@@ -4,42 +4,6 @@ export type ClientOptions = {
   baseUrl: `${string}://${string}` | (string & {})
 }
 
-export type Project = {
-  id: string
-  worktree: string
-  vcs?: "git"
-  name?: string
-  icon?: {
-    url?: string
-    override?: string
-    color?: string
-  }
-  commands?: {
-    /**
-     * Startup script to run when creating a new workspace (worktree)
-     */
-    start?: string
-  }
-  time: {
-    created: number
-    updated: number
-    initialized?: number
-  }
-  sandboxes: Array<string>
-}
-
-export type EventProjectUpdated = {
-  type: "project.updated"
-  properties: Project
-}
-
-export type EventServerInstanceDisposed = {
-  type: "server.instance.disposed"
-  properties: {
-    directory: string
-  }
-}
-
 export type EventServerConnected = {
   type: "server.connected"
   properties: {
@@ -54,87 +18,67 @@ export type EventGlobalDisposed = {
   }
 }
 
-export type EventFileEdited = {
-  type: "file.edited"
+export type EventTuiPromptAppend = {
+  type: "tui.prompt.append"
   properties: {
-    file: string
+    text: string
   }
 }
 
-export type EventFileWatcherUpdated = {
-  type: "file.watcher.updated"
+export type EventTuiCommandExecute = {
+  type: "tui.command.execute"
   properties: {
-    file: string
-    event: "add" | "change" | "unlink"
+    command:
+      | "session.list"
+      | "session.new"
+      | "session.share"
+      | "session.interrupt"
+      | "session.compact"
+      | "session.page.up"
+      | "session.page.down"
+      | "session.line.up"
+      | "session.line.down"
+      | "session.half.page.up"
+      | "session.half.page.down"
+      | "session.first"
+      | "session.last"
+      | "prompt.clear"
+      | "prompt.submit"
+      | "agent.cycle"
+      | string
   }
 }
 
-export type EventLspClientDiagnostics = {
-  type: "lsp.client.diagnostics"
+export type EventTuiToastShow = {
+  type: "tui.toast.show"
   properties: {
-    serverID: string
-    path: string
+    title?: string
+    message: string
+    variant: "info" | "success" | "warning" | "error"
+    /**
+     * Duration in milliseconds
+     */
+    duration?: number
   }
 }
 
-export type EventLspUpdated = {
-  type: "lsp.updated"
+export type EventTuiSessionSelect = {
+  type: "tui.session.select"
   properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventInstallationUpdated = {
-  type: "installation.updated"
-  properties: {
-    version: string
-  }
-}
-
-export type EventInstallationUpdateAvailable = {
-  type: "installation.update-available"
-  properties: {
-    version: string
-  }
-}
-
-export type EventMessagePartDelta = {
-  type: "message.part.delta"
-  properties: {
+    /**
+     * Session ID to navigate to
+     */
     sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
   }
 }
 
-export type PermissionRequest = {
-  id: string
-  sessionID: string
-  permission: string
-  patterns: Array<string>
-  metadata: {
-    [key: string]: unknown
-  }
-  always: Array<string>
-  tool?: {
-    messageID: string
-    callID: string
-  }
-}
-
-export type EventPermissionAsked = {
-  type: "permission.asked"
-  properties: PermissionRequest
-}
-
-export type EventPermissionReplied = {
-  type: "permission.replied"
+export type EventTuiInstructionsLoaded = {
+  type: "tui.instructions.loaded"
   properties: {
-    sessionID: string
-    requestID: string
-    reply: "once" | "always" | "reject"
+    /**
+     * Display labels of loaded instruction files: worktree-relative path, ~-path, or absolute
+     */
+    files: Array<string>
   }
 }
 
@@ -175,6 +119,17 @@ export type EventActorStuck = {
   }
 }
 
+export type EventActorStalled = {
+  type: "actor.stalled"
+  properties: {
+    sessionID: string
+    actorID: string
+    description: string
+    lastTurnTime: number
+    stalledDuration: number
+  }
+}
+
 export type EventWriterCachePerf = {
   type: "writer.cache_perf"
   properties: {
@@ -198,6 +153,302 @@ export type EventInboxArrived = {
     senderActorID?: string
     inboxID: string
     type: string
+  }
+}
+
+export type EventTaskCreated = {
+  type: "task.created"
+  properties: {
+    sessionID: string
+    task: {
+      id: string
+      session_id: string
+      parent_task_id?: string
+      status: "open" | "in_progress" | "blocked" | "done" | "abandoned"
+      summary: string
+      owner?: string
+      created_at: number
+      last_event_at: number
+      ended_at?: number
+      cleanup_after?: number
+    }
+  }
+}
+
+export type EventTaskUpdated = {
+  type: "task.updated"
+  properties: {
+    sessionID: string
+    task: {
+      id: string
+      session_id: string
+      parent_task_id?: string
+      status: "open" | "in_progress" | "blocked" | "done" | "abandoned"
+      summary: string
+      owner?: string
+      created_at: number
+      last_event_at: number
+      ended_at?: number
+      cleanup_after?: number
+    }
+    kind: "started" | "unstarted" | "blocked" | "unblocked" | "done" | "abandoned" | "renamed"
+  }
+}
+
+export type EventMetricsModelCall = {
+  type: "metrics.model_call"
+  properties: {
+    sessionID: string
+    finish_reason: string
+    ttft_ms?: number
+    latency_ms: number
+    cached_read_tokens: number
+    model_id: string
+    provider: string
+    total_tokens_in: number
+    total_tokens_out: number
+  }
+}
+
+export type EventMetricsToolCall = {
+  type: "metrics.tool_call"
+  properties: {
+    sessionID: string
+    tool_name: string
+    input_bytes: number
+    output_bytes: number
+    tool_call_id: string
+    tool_call_status: "success" | "error" | "cancelled"
+  }
+}
+
+export type EventMetricsAgentRequest = {
+  type: "metrics.agent_request"
+  properties: {
+    sessionID: string
+    phase: string
+    task_type: string
+    surface: string
+    total_tokens_in: number
+    total_tokens_out: number
+    files_changed: number
+    validation_status: string
+  }
+}
+
+export type EventMetricsTryBestDetected = {
+  type: "metrics.try_best_detected"
+  properties: {
+    sessionID: string
+    reason: "edit_repeat" | "bash_retry" | "action_streak"
+    provider: string
+    model_id: string
+    count: number
+    similarity?: number
+    action?: "edit" | "verify"
+  }
+}
+
+export type EventTeamCreated = {
+  type: "team.created"
+  properties: {
+    teamID: string
+    creatorSessionID: string
+  }
+}
+
+export type EventTeamMemberJoined = {
+  type: "team.member.joined"
+  properties: {
+    teamID: string
+    sessionID: string
+    agent: string
+    role: string
+  }
+}
+
+export type EventWorkflowPhase = {
+  type: "workflow.phase"
+  properties: {
+    sessionID: string
+    runID: string
+    title: string
+  }
+}
+
+export type EventWorkflowLog = {
+  type: "workflow.log"
+  properties: {
+    sessionID: string
+    runID: string
+    message: string
+  }
+}
+
+export type EventWorkflowStarted = {
+  type: "workflow.started"
+  properties: {
+    sessionID: string
+    runID: string
+    name: string
+  }
+}
+
+export type EventWorkflowFinished = {
+  type: "workflow.finished"
+  properties: {
+    sessionID: string
+    runID: string
+    status: "completed" | "failed" | "cancelled"
+    error?: string
+  }
+}
+
+export type EventWorkflowAgentFailed = {
+  type: "workflow.agent_failed"
+  properties: {
+    sessionID: string
+    runID: string
+    actorID?: string
+    agentType: string
+    label?: string
+    phase?: string
+    reason: "over-cap" | "spawn-reject" | "timeout" | "actor-error" | "no-deliverable"
+    errorMessage?: string
+  }
+}
+
+export type EventWorkflowChildFailed = {
+  type: "workflow.child_failed"
+  properties: {
+    sessionID: string
+    runID: string
+    childRunID: string
+    name: string
+    status: "failed" | "cancelled"
+    error?: string
+  }
+}
+
+export type Project = {
+  id: string
+  worktree: string
+  vcs?: "git"
+  name?: string
+  icon?: {
+    url?: string
+    override?: string
+    color?: string
+  }
+  commands?: {
+    /**
+     * Startup script to run when creating a new workspace (worktree)
+     */
+    start?: string
+  }
+  time: {
+    created: number
+    updated: number
+    initialized?: number
+  }
+  sandboxes: Array<string>
+}
+
+export type EventProjectUpdated = {
+  type: "project.updated"
+  properties: Project
+}
+
+export type EventServerInstanceDisposed = {
+  type: "server.instance.disposed"
+  properties: {
+    directory: string
+  }
+}
+
+export type EventFileEdited = {
+  type: "file.edited"
+  properties: {
+    file: string
+  }
+}
+
+export type EventFileWatcherUpdated = {
+  type: "file.watcher.updated"
+  properties: {
+    file: string
+    event: "add" | "change" | "unlink"
+  }
+}
+
+export type EventLspClientDiagnostics = {
+  type: "lsp.client.diagnostics"
+  properties: {
+    serverID: string
+    path: string
+  }
+}
+
+export type EventLspUpdated = {
+  type: "lsp.updated"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventInstallationUpdated = {
+  type: "installation.updated"
+  properties: {
+    version: string
+    method?: string
+  }
+}
+
+export type EventInstallationUpdateAvailable = {
+  type: "installation.update-available"
+  properties: {
+    version: string
+    method?: string
+  }
+}
+
+export type EventMessagePartDelta = {
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+export type PermissionRequest = {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: Array<string>
+  metadata: {
+    [key: string]: unknown
+  }
+  always: Array<string>
+  tool?: {
+    messageID: string
+    callID: string
+  }
+}
+
+export type EventPermissionAsked = {
+  type: "permission.asked"
+  properties: PermissionRequest
+}
+
+export type EventPermissionReplied = {
+  type: "permission.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: "once" | "always" | "reject"
   }
 }
 
@@ -269,6 +520,13 @@ export type InvalidOutputError = {
   }
 }
 
+export type TextToolCallError = {
+  name: "TextToolCallError"
+  data: {
+    message: string
+  }
+}
+
 export type ContentFilterError = {
   name: "ContentFilterError"
   data: {
@@ -311,6 +569,7 @@ export type EventSessionError = {
       | StructuredOutputError
       | ContextOverflowError
       | InvalidOutputError
+      | TextToolCallError
       | ContentFilterError
       | ModelError
       | ApiError
@@ -326,6 +585,25 @@ export type EventSessionRetryAttempt = {
     maxAttempts: number
     reason: string
     nextDelayMs: number
+  }
+}
+
+export type EventSessionTryBestDetected = {
+  type: "session.try_best.detected"
+  properties: {
+    sessionID: string
+    agentID?: string
+    providerID: string
+    modelID: string
+    reason: "edit_repeat" | "bash_retry" | "action_streak"
+    evidence: {
+      tool: string
+      path?: string
+      command?: string
+      count: number
+      similarity?: number
+      action?: "edit" | "verify"
+    }
   }
 }
 
@@ -482,82 +760,6 @@ export type EventBashInteractiveReplied = {
   }
 }
 
-export type EventTeamCreated = {
-  type: "team.created"
-  properties: {
-    teamID: string
-    creatorSessionID: string
-  }
-}
-
-export type EventTeamMemberJoined = {
-  type: "team.member.joined"
-  properties: {
-    teamID: string
-    sessionID: string
-    agent: string
-    role: string
-  }
-}
-
-export type EventTaskCreated = {
-  type: "task.created"
-  properties: {
-    sessionID: string
-    task: {
-      id: string
-      session_id: string
-      parent_task_id?: string
-      status: "open" | "in_progress" | "blocked" | "done" | "abandoned"
-      summary: string
-      owner?: string
-      created_at: number
-      last_event_at: number
-      ended_at?: number
-      cleanup_after?: number
-    }
-  }
-}
-
-export type EventTaskUpdated = {
-  type: "task.updated"
-  properties: {
-    sessionID: string
-    task: {
-      id: string
-      session_id: string
-      parent_task_id?: string
-      status: "open" | "in_progress" | "blocked" | "done" | "abandoned"
-      summary: string
-      owner?: string
-      created_at: number
-      last_event_at: number
-      ended_at?: number
-      cleanup_after?: number
-    }
-    kind: "started" | "unstarted" | "blocked" | "unblocked" | "done" | "abandoned" | "renamed"
-  }
-}
-
-export type Todo = {
-  /**
-   * Brief description of the task
-   */
-  content: string
-  /**
-   * Current status of the task: pending, in_progress, completed, cancelled
-   */
-  status: string
-}
-
-export type EventTodoUpdated = {
-  type: "todo.updated"
-  properties: {
-    sessionID: string
-    todos: Array<Todo>
-  }
-}
-
 export type SessionStatus =
   | {
       type: "idle"
@@ -588,133 +790,10 @@ export type EventSessionIdle = {
   }
 }
 
-export type EventSessionGoal = {
-  type: "session.goal"
+export type EventVcsBranchUpdated = {
+  type: "vcs.branch.updated"
   properties: {
-    sessionID: string
-    goal?: {
-      condition: string
-    }
-    lastVerdict?: {
-      ok: boolean
-      impossible?: boolean
-      reason: string
-      attempt: number
-      messageID?: string
-      error?: boolean
-    }
-  }
-}
-
-export type EventMetricsModelCall = {
-  type: "metrics.model_call"
-  properties: {
-    sessionID: string
-    finish_reason: string
-    ttft_ms?: number
-    latency_ms: number
-    cached_read_tokens: number
-    model_id: string
-    provider: string
-    total_tokens_in: number
-    total_tokens_out: number
-  }
-}
-
-export type EventMetricsToolCall = {
-  type: "metrics.tool_call"
-  properties: {
-    sessionID: string
-    tool_name: string
-    input_bytes: number
-    output_bytes: number
-    tool_call_id: string
-    tool_call_status: "success" | "error"
-  }
-}
-
-export type EventMetricsAgentRequest = {
-  type: "metrics.agent_request"
-  properties: {
-    sessionID: string
-    phase: string
-    task_type: string
-    surface: string
-    total_tokens_in: number
-    total_tokens_out: number
-    files_changed: number
-    validation_status: string
-  }
-}
-
-export type EventSessionCompacted = {
-  type: "session.compacted"
-  properties: {
-    sessionID: string
-  }
-}
-
-export type EventTuiPromptAppend = {
-  type: "tui.prompt.append"
-  properties: {
-    text: string
-  }
-}
-
-export type EventTuiCommandExecute = {
-  type: "tui.command.execute"
-  properties: {
-    command:
-      | "session.list"
-      | "session.new"
-      | "session.share"
-      | "session.interrupt"
-      | "session.compact"
-      | "session.page.up"
-      | "session.page.down"
-      | "session.line.up"
-      | "session.line.down"
-      | "session.half.page.up"
-      | "session.half.page.down"
-      | "session.first"
-      | "session.last"
-      | "prompt.clear"
-      | "prompt.submit"
-      | "agent.cycle"
-      | string
-  }
-}
-
-export type EventTuiToastShow = {
-  type: "tui.toast.show"
-  properties: {
-    title?: string
-    message: string
-    variant: "info" | "success" | "warning" | "error"
-    /**
-     * Duration in milliseconds
-     */
-    duration?: number
-  }
-}
-
-export type EventTuiSessionSelect = {
-  type: "tui.session.select"
-  properties: {
-    /**
-     * Session ID to navigate to
-     */
-    sessionID: string
-  }
-}
-
-export type EventTuiInstructionsLoaded = {
-  type: "tui.instructions.loaded"
-  properties: {
-    /**
-     * Display labels of loaded instruction files: worktree-relative path, ~-path, or absolute
-     */
-    files: Array<string>
+    branch?: string
   }
 }
 
@@ -743,13 +822,6 @@ export type EventCommandExecuted = {
   }
 }
 
-export type EventVcsBranchUpdated = {
-  type: "vcs.branch.updated"
-  properties: {
-    branch?: string
-  }
-}
-
 export type EventWorktreeReady = {
   type: "worktree.ready"
   properties: {
@@ -762,6 +834,51 @@ export type EventWorktreeFailed = {
   type: "worktree.failed"
   properties: {
     message: string
+  }
+}
+
+export type Todo = {
+  /**
+   * Brief description of the task
+   */
+  content: string
+  /**
+   * Current status of the task: pending, in_progress, completed, cancelled
+   */
+  status: string
+}
+
+export type EventTodoUpdated = {
+  type: "todo.updated"
+  properties: {
+    sessionID: string
+    todos: Array<Todo>
+  }
+}
+
+export type EventSessionGoal = {
+  type: "session.goal"
+  properties: {
+    sessionID: string
+    goal?: {
+      condition: string
+    }
+    lastVerdict?: {
+      ok: boolean
+      impossible?: boolean
+      reason: string
+      attempt: number
+      messageID?: string
+      error?: boolean
+    }
+  }
+}
+
+export type EventSessionCompacted = {
+  type: "session.compacted"
+  properties: {
+    sessionID: string
+    agentID?: string
   }
 }
 
@@ -801,43 +918,6 @@ export type EventPtyDeleted = {
   type: "pty.deleted"
   properties: {
     id: string
-  }
-}
-
-export type EventWorkflowPhase = {
-  type: "workflow.phase"
-  properties: {
-    sessionID: string
-    runID: string
-    title: string
-  }
-}
-
-export type EventWorkflowLog = {
-  type: "workflow.log"
-  properties: {
-    sessionID: string
-    runID: string
-    message: string
-  }
-}
-
-export type EventWorkflowStarted = {
-  type: "workflow.started"
-  properties: {
-    sessionID: string
-    runID: string
-    name: string
-  }
-}
-
-export type EventWorkflowFinished = {
-  type: "workflow.finished"
-  properties: {
-    sessionID: string
-    runID: string
-    status: "completed" | "failed" | "cancelled"
-    error?: string
   }
 }
 
@@ -940,6 +1020,7 @@ export type AssistantMessage = {
     | StructuredOutputError
     | ContextOverflowError
     | InvalidOutputError
+    | TextToolCallError
     | ContentFilterError
     | ModelError
     | ApiError
@@ -1139,6 +1220,7 @@ export type ToolStateError = {
     start: number
     end: number
   }
+  attachments?: Array<FilePart>
 }
 
 export type ToolState = ToolStatePending | ToolStateRunning | ToolStateCompleted | ToolStateError
@@ -1472,10 +1554,35 @@ export type GlobalEvent = {
   project?: string
   workspace?: string
   payload:
-    | EventProjectUpdated
-    | EventServerInstanceDisposed
     | EventServerConnected
     | EventGlobalDisposed
+    | EventTuiPromptAppend
+    | EventTuiCommandExecute
+    | EventTuiToastShow
+    | EventTuiSessionSelect
+    | EventTuiInstructionsLoaded
+    | EventActorRegistered
+    | EventActorStatus
+    | EventActorStuck
+    | EventActorStalled
+    | EventWriterCachePerf
+    | EventInboxArrived
+    | EventTaskCreated
+    | EventTaskUpdated
+    | EventMetricsModelCall
+    | EventMetricsToolCall
+    | EventMetricsAgentRequest
+    | EventMetricsTryBestDetected
+    | EventTeamCreated
+    | EventTeamMemberJoined
+    | EventWorkflowPhase
+    | EventWorkflowLog
+    | EventWorkflowStarted
+    | EventWorkflowFinished
+    | EventWorkflowAgentFailed
+    | EventWorkflowChildFailed
+    | EventProjectUpdated
+    | EventServerInstanceDisposed
     | EventFileEdited
     | EventFileWatcherUpdated
     | EventLspClientDiagnostics
@@ -1485,14 +1592,10 @@ export type GlobalEvent = {
     | EventMessagePartDelta
     | EventPermissionAsked
     | EventPermissionReplied
-    | EventActorRegistered
-    | EventActorStatus
-    | EventActorStuck
-    | EventWriterCachePerf
-    | EventInboxArrived
     | EventSessionDiff
     | EventSessionError
     | EventSessionRetryAttempt
+    | EventSessionTryBestDetected
     | EventHookExecuted
     | EventHookReactReentered
     | EventHookReactMaxReached
@@ -1502,37 +1605,21 @@ export type GlobalEvent = {
     | EventSessionCwd
     | EventBashInteractiveAsked
     | EventBashInteractiveReplied
-    | EventTeamCreated
-    | EventTeamMemberJoined
-    | EventTaskCreated
-    | EventTaskUpdated
-    | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
-    | EventSessionGoal
-    | EventMetricsModelCall
-    | EventMetricsToolCall
-    | EventMetricsAgentRequest
-    | EventSessionCompacted
-    | EventTuiPromptAppend
-    | EventTuiCommandExecute
-    | EventTuiToastShow
-    | EventTuiSessionSelect
-    | EventTuiInstructionsLoaded
+    | EventVcsBranchUpdated
     | EventMcpToolsChanged
     | EventMcpBrowserOpenFailed
     | EventCommandExecuted
-    | EventVcsBranchUpdated
     | EventWorktreeReady
     | EventWorktreeFailed
+    | EventTodoUpdated
+    | EventSessionGoal
+    | EventSessionCompacted
     | EventPtyCreated
     | EventPtyUpdated
     | EventPtyExited
     | EventPtyDeleted
-    | EventWorkflowPhase
-    | EventWorkflowLog
-    | EventWorkflowStarted
-    | EventWorkflowFinished
     | EventWorkspaceReady
     | EventWorkspaceFailed
     | EventWorkspaceRestore
@@ -1715,10 +1802,14 @@ export type ProviderConfig = {
      */
     timeout?: number | false
     /**
+     * Timeout in milliseconds while waiting for response headers. OpenAI defaults to 300000 (5 minutes). Set to false to disable.
+     */
+    headerTimeout?: number | false
+    /**
      * Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.
      */
     chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | undefined
+    [key: string]: unknown | string | boolean | number | false | number | false | number | undefined
   }
   models?: {
     [key: string]: {
@@ -1733,7 +1824,7 @@ export type ProviderConfig = {
       interleaved?:
         | true
         | {
-            field: "reasoning_content" | "reasoning_details"
+            field: "reasoning" | "reasoning_content" | "reasoning_details"
           }
       cost?: {
         input: number
@@ -1786,6 +1877,10 @@ export type ProviderConfig = {
       }
     }
   }
+  /**
+   * When true, show only the models listed in this provider's `models` map and hide the rest of the catalog (acts as an implicit whitelist). Defaults to false: `models` only augments/overrides the catalog without filtering it.
+   */
+  only_configured_models?: boolean
 }
 
 export type McpLocalConfig = {
@@ -1874,7 +1969,7 @@ export type Config = {
   logLevel?: LogLevel
   server?: ServerConfig
   /**
-   * Command configuration, see https://opencode.ai/docs/commands
+   * Command configuration, see https://mimo.xiaomi.com/mimocode/commands
    */
   command?: {
     [key: string]: {
@@ -1897,6 +1992,19 @@ export type Config = {
      * URLs to fetch skills from (e.g., https://example.com/.well-known/skills/)
      */
     urls?: Array<string>
+  }
+  /**
+   * Compose mode configuration
+   */
+  compose?: {
+    /**
+     * Directory where compose skills save specs, plans, and reports. Relative paths are passed to the agent prompt verbatim; set docs_absolute: true to anchor them to the project root. Defaults to docs/compose.
+     */
+    docs?: string
+    /**
+     * Whether the docs directory injected into the compose prompt is an absolute path. When false (default), a relative `docs` value is passed through verbatim. When true, a relative `docs` is resolved against the active worktree root so it is unambiguous regardless of the agent's working directory. Ignored when `docs` is already absolute.
+     */
+    docs_absolute?: boolean
   }
   watcher?: {
     ignore?: Array<string>
@@ -1943,6 +2051,10 @@ export type Config = {
    */
   small_model?: string
   /**
+   * Model to use for image/vision subagent tasks in the format of provider/model. If unset, a vision-capable model is chosen automatically (in-house models preferred, then cheapest).
+   */
+  vision_model?: string
+  /**
    * Named model groups (capability tiers, e.g. ultra/standard/lite). Each group has a default model and optional member models. A group name can be used anywhere a provider/model string is accepted.
    */
   model_groups?: {
@@ -1970,7 +2082,7 @@ export type Config = {
     [key: string]: AgentConfig | undefined
   }
   /**
-   * Agent configuration, see https://opencode.ai/docs/agents
+   * Agent configuration, see https://mimo.xiaomi.com/mimocode/agents
    */
   agent?: {
     plan?: AgentConfig
@@ -2143,6 +2255,14 @@ export type Config = {
        * Token cap for §11 Open notes section of checkpoint.md (writer-side budget validation). Default: 800.
        */
       open_notes?: number
+      /**
+       * Token cap for the recent user input section (verbatim user messages from the live DB, FIFO eviction). Default: 16000. Set 0 to disable.
+       */
+      recent_user?: number
+      /**
+       * Per-message cap inside recent user input section; oversized messages get head/tail truncation with messageID elision marker. Default: 2000.
+       */
+      recent_user_per_msg?: number
     }
     /**
      * Number of days after task done/abandoned before it's filtered out of `list({include_archived: false})`. Rows are NOT deleted — see v9 for true GC. Default: 7.
@@ -2156,6 +2276,58 @@ export type Config = {
      * Whether to reconcile memory state on search operations. Default: true.
      */
     memory_reconcile_on_search?: boolean
+    /**
+     * Relative BM25 floor for memory.search (OR-joined query): keep results scoring >= this fraction of the top hit, dropping common-word-only noise. The #1 result is always kept. Default: 0.15. Set 0 to keep all matches.
+     */
+    memory_search_score_floor?: number
+  }
+  memory?: {
+    /**
+     * Index Claude Code memory (~/.claude/projects/<slug>/memory) and expose under scope='cc'. Default: false. Note: when enabled, every mimocode agent (build/explore/subagents) can search these memories via the builtin `memory` tool — including CC's `type: user` (your role/preferences) and `type: feedback` (your guidance) categories. CC originally writes them for future CC sessions; flipping this on widens the consumer set to mimocode agents on the same machine. Leave disabled (default) if you don't want personal context recallable from a prompt-injection-vulnerable agent.
+     */
+    cc_index?: boolean
+  }
+  /**
+   * Trajectory (conversation history) FTS index configuration.
+   */
+  history?: {
+    /**
+     * Which part kinds the history FTS index should cover. Defaults to text (user/assistant) + tool input + tool errors. Add 'reasoning' or 'tool_output' to grow recall at the cost of database size. Note: enabling 'tool_output' reclassifies completed tools from kind='tool_input' to kind='tool_output' (input remains searchable in the body, but kind:['tool_input'] filter will then only match pending/error tools).
+     */
+    kinds?: Array<"user_text" | "assistant_text" | "tool_input" | "tool_error" | "reasoning" | "tool_output">
+  }
+  dream?: {
+    /**
+     * Auto-trigger dream memory consolidation on new session start. Default: true.
+     */
+    auto?: boolean
+    /**
+     * Minimum days between automatic dream runs. Set to 0 to trigger on every new session. Default: 7.
+     */
+    interval_days?: number
+  }
+  distill?: {
+    /**
+     * Auto-trigger distill workflow packaging on new session start. Default: true.
+     */
+    auto?: boolean
+    /**
+     * Minimum days between automatic distill runs. Default: 30.
+     */
+    interval_days?: number
+  }
+  /**
+   * Voice input provider and model configuration.
+   */
+  voice?: {
+    /**
+     * Model to use for voice ASR transcription in provider/model format. Defaults to xiaomi/mimo-v2.5-asr.
+     */
+    asr_model?: string
+    /**
+     * Model to use for voice control (multimodal) in provider/model format. Defaults to xiaomi/mimo-v2.5.
+     */
+    control_model?: string
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -2175,6 +2347,27 @@ export type Config = {
      * Continue the agent loop when a tool call is denied
      */
     continue_loop_on_deny?: boolean
+    /**
+     * Try-best loop detector thresholds.
+     */
+    try_best?: {
+      /**
+       * Recent edit events to compare (default 12).
+       */
+      edit_window?: number
+      /**
+       * Jaccard threshold for near-identical edit detection (default 0.8).
+       */
+      edit_similarity?: number
+      /**
+       * Prior similar edits required before pausing (default 2).
+       */
+      edit_matches?: number
+      /**
+       * Consecutive edit or verify actions without progress before pausing (default 4).
+       */
+      action_streak?: number
+    }
     /**
      * Timeout in milliseconds for model context protocol (MCP) requests
      */
@@ -2198,9 +2391,17 @@ export type Config = {
    */
   workflow?: {
     /**
-     * Max subagents running concurrently in one workflow run. Default min(16, 2x CPU cores). Hard-capped at 2x cores.
+     * Process-wide ceiling on subagents running concurrently across ALL workflow runs (including nested children). Default min(16, 2x CPU cores). No upper clamp: the previous 2x-cores hard cap was removed so an operator can match real provider capacity — but that also means a misconfigured value (e.g. an extra zero) can exhaust provider rate limits or host memory. This is the only concurrency ceiling, so set it deliberately.
      */
     maxConcurrentAgents?: number
+    /**
+     * Max nesting depth for workflow()-calls-workflow. Default 8. Exceeding it fails the run.
+     */
+    maxDepth?: number
+    /**
+     * Hard ceiling on total agents a single workflow run may spawn over its life. Default 1000. Over-cap agent() calls return null (graceful degradation). PER-RUN, not tree-wide: each child workflow has its own independent budget, so a deep nesting can spawn maxDepth × this over the whole tree (concurrent in-flight is still bounded by maxConcurrentAgents).
+     */
+    maxLifecycleAgents?: number
     /**
      * Wall-clock budget for a whole workflow script, in milliseconds. Default 12h. The sandbox interrupt handler enforces this as a hard kill-switch.
      */
@@ -2290,7 +2491,7 @@ export type Model = {
     interleaved:
       | boolean
       | {
-          field: "reasoning_content" | "reasoning_details"
+          field: "reasoning" | "reasoning_content" | "reasoning_details"
         }
   }
   cost: {
@@ -2574,10 +2775,35 @@ export type File = {
 }
 
 export type Event =
-  | EventProjectUpdated
-  | EventServerInstanceDisposed
   | EventServerConnected
   | EventGlobalDisposed
+  | EventTuiPromptAppend
+  | EventTuiCommandExecute
+  | EventTuiToastShow
+  | EventTuiSessionSelect
+  | EventTuiInstructionsLoaded
+  | EventActorRegistered
+  | EventActorStatus
+  | EventActorStuck
+  | EventActorStalled
+  | EventWriterCachePerf
+  | EventInboxArrived
+  | EventTaskCreated
+  | EventTaskUpdated
+  | EventMetricsModelCall
+  | EventMetricsToolCall
+  | EventMetricsAgentRequest
+  | EventMetricsTryBestDetected
+  | EventTeamCreated
+  | EventTeamMemberJoined
+  | EventWorkflowPhase
+  | EventWorkflowLog
+  | EventWorkflowStarted
+  | EventWorkflowFinished
+  | EventWorkflowAgentFailed
+  | EventWorkflowChildFailed
+  | EventProjectUpdated
+  | EventServerInstanceDisposed
   | EventFileEdited
   | EventFileWatcherUpdated
   | EventLspClientDiagnostics
@@ -2587,14 +2813,10 @@ export type Event =
   | EventMessagePartDelta
   | EventPermissionAsked
   | EventPermissionReplied
-  | EventActorRegistered
-  | EventActorStatus
-  | EventActorStuck
-  | EventWriterCachePerf
-  | EventInboxArrived
   | EventSessionDiff
   | EventSessionError
   | EventSessionRetryAttempt
+  | EventSessionTryBestDetected
   | EventHookExecuted
   | EventHookReactReentered
   | EventHookReactMaxReached
@@ -2604,37 +2826,21 @@ export type Event =
   | EventSessionCwd
   | EventBashInteractiveAsked
   | EventBashInteractiveReplied
-  | EventTeamCreated
-  | EventTeamMemberJoined
-  | EventTaskCreated
-  | EventTaskUpdated
-  | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
-  | EventSessionGoal
-  | EventMetricsModelCall
-  | EventMetricsToolCall
-  | EventMetricsAgentRequest
-  | EventSessionCompacted
-  | EventTuiPromptAppend
-  | EventTuiCommandExecute
-  | EventTuiToastShow
-  | EventTuiSessionSelect
-  | EventTuiInstructionsLoaded
+  | EventVcsBranchUpdated
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
-  | EventVcsBranchUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
+  | EventTodoUpdated
+  | EventSessionGoal
+  | EventSessionCompacted
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
-  | EventWorkflowPhase
-  | EventWorkflowLog
-  | EventWorkflowStarted
-  | EventWorkflowFinished
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceRestore
@@ -2708,6 +2914,7 @@ export type Command = {
   agent?: string
   model?: string
   source?: "command" | "mcp" | "skill"
+  bundled?: boolean
   template: string
   subtask?: boolean
   hints: Array<string>
@@ -2723,6 +2930,7 @@ export type Agent = {
   temperature?: number
   color?: string
   permission: PermissionRuleset
+  hardPermission?: PermissionRuleset
   model?: {
     modelID: string
     providerID: string
@@ -2876,6 +3084,64 @@ export type GlobalUpgradeResponses = {
 }
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
+
+export type GlobalImportScanData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/import/scan"
+}
+
+export type GlobalImportScanResponses = {
+  /**
+   * Per-source availability and counts
+   */
+  200: {
+    [key: string]: {
+      available: boolean
+      sessions: number
+      imported: number
+    }
+  }
+}
+
+export type GlobalImportScanResponse = GlobalImportScanResponses[keyof GlobalImportScanResponses]
+
+export type GlobalImportRunData = {
+  body?: {
+    sources?: Array<"cc" | "codex" | "opencode">
+    force?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/global/import/run"
+}
+
+export type GlobalImportRunErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalImportRunError = GlobalImportRunErrors[keyof GlobalImportRunErrors]
+
+export type GlobalImportRunResponses = {
+  /**
+   * Per-source import stats
+   */
+  200: {
+    [key: string]: {
+      scanned: number
+      imported: number
+      resynced: number
+      skipped: number
+      errors: Array<string>
+    }
+  }
+}
+
+export type GlobalImportRunResponse = GlobalImportRunResponses[keyof GlobalImportRunResponses]
 
 export type AuthRemoveData = {
   body?: never
@@ -3402,6 +3668,43 @@ export type PtyUpdateResponses = {
 }
 
 export type PtyUpdateResponse = PtyUpdateResponses[keyof PtyUpdateResponses]
+
+export type PtyConnectTokenData = {
+  body?: never
+  path: {
+    ptyID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/pty/{ptyID}/connect-token"
+}
+
+export type PtyConnectTokenErrors = {
+  /**
+   * Forbidden — missing required header or invalid origin
+   */
+  403: unknown
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type PtyConnectTokenError = PtyConnectTokenErrors[keyof PtyConnectTokenErrors]
+
+export type PtyConnectTokenResponses = {
+  /**
+   * Issued ticket
+   */
+  200: {
+    ticket: string
+    expires_in: number
+  }
+}
+
+export type PtyConnectTokenResponse = PtyConnectTokenResponses[keyof PtyConnectTokenResponses]
 
 export type PtyConnectData = {
   body?: never
@@ -4023,6 +4326,10 @@ export type SessionChildrenData = {
   query?: {
     directory?: string
     workspace?: string
+    /**
+     * Only return user-visible children (peer sessions); hides internal subagent hosts
+     */
+    visible?: boolean
   }
   url: "/session/{sessionID}/children"
 }
@@ -4351,6 +4658,46 @@ export type SessionSummarizeResponses = {
 
 export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSummarizeResponses]
 
+export type SessionAskData = {
+  body?: {
+    question: string
+    providerID?: string
+    modelID?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/ask"
+}
+
+export type SessionAskErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionAskError = SessionAskErrors[keyof SessionAskErrors]
+
+export type SessionAskResponses = {
+  /**
+   * Side question answer
+   */
+  200: {
+    answer: string
+  }
+}
+
+export type SessionAskResponse = SessionAskResponses[keyof SessionAskResponses]
+
 export type SessionMessagesData = {
   body?: never
   path: {
@@ -4360,7 +4707,7 @@ export type SessionMessagesData = {
     directory?: string
     workspace?: string
     /**
-     * Maximum number of messages to return
+     * Maximum number of messages to return (max 1000)
      */
     limit?: number
     before?: string
@@ -5008,6 +5355,58 @@ export type PermissionListResponses = {
 
 export type PermissionListResponse = PermissionListResponses[keyof PermissionListResponses]
 
+export type PermissionSkipAllData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/skip-all"
+}
+
+export type PermissionSkipAllResponses = {
+  /**
+   * Current skip-all state
+   */
+  200: boolean
+}
+
+export type PermissionSkipAllResponse = PermissionSkipAllResponses[keyof PermissionSkipAllResponses]
+
+export type PermissionSetSkipAllData = {
+  body?: {
+    /**
+     * Whether skip-all is enabled
+     */
+    enabled: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/skip-all"
+}
+
+export type PermissionSetSkipAllErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type PermissionSetSkipAllError = PermissionSetSkipAllErrors[keyof PermissionSetSkipAllErrors]
+
+export type PermissionSetSkipAllResponses = {
+  /**
+   * Updated skip-all state
+   */
+  200: boolean
+}
+
+export type PermissionSetSkipAllResponse = PermissionSetSkipAllResponses[keyof PermissionSetSkipAllResponses]
+
 export type WorkflowListData = {
   body?: never
   path?: never
@@ -5051,6 +5450,57 @@ export type WorkflowResumeResponses = {
 }
 
 export type WorkflowResumeResponse = WorkflowResumeResponses[keyof WorkflowResumeResponses]
+
+export type WorkflowTranscriptData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflows/{runID}/transcript"
+}
+
+export type WorkflowTranscriptResponses = {
+  /**
+   * Full transcript
+   */
+  200: {
+    runID: string
+    transcript: Array<{
+      kind: "phase" | "log"
+      text: string
+    }>
+  }
+}
+
+export type WorkflowTranscriptResponse = WorkflowTranscriptResponses[keyof WorkflowTranscriptResponses]
+
+export type WorkflowStructureData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflows/{runID}/structure"
+}
+
+export type WorkflowStructureResponses = {
+  /**
+   * Structure tree
+   */
+  200: {
+    runID: string
+    nodes: Array<unknown>
+  }
+}
+
+export type WorkflowStructureResponse = WorkflowStructureResponses[keyof WorkflowStructureResponses]
 
 export type QuestionListData = {
   body?: never
@@ -5283,6 +5733,7 @@ export type ProviderListResponses = {
       [key: string]: string
     }
     connected: Array<string>
+    authenticated: Array<string>
   }
 }
 
@@ -6334,9 +6785,11 @@ export type AppSkillsResponses = {
   200: Array<{
     name: string
     description: string
+    aliases?: Array<string>
     location: string
     content: string
     hidden?: boolean
+    bundled?: boolean
   }>
 }
 

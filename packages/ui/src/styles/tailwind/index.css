@@ -2,6 +2,11 @@
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source("../../../../");
+/* Exclude files whose comments/strings contain bracket syntax that the
+   tailwind scanner misinterprets as arbitrary-value classes, producing
+   invalid CSS (e.g. [edit:""], [data-url:mime[:filename]]). */
+@source not "../../../../opencode/src/cli/cmd/tui/util/voice.ts";
+@source not "../../../../plugin/src/index.ts";
 @import "./utilities.css";
 
 @import "../index.css";

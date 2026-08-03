@@ -1,4 +1,4 @@
-import { BoxRenderable, RGBA, TextareaRenderable, MouseEvent, PasteEvent, decodePasteBytes } from "@opentui/core"
+import { BoxRenderable, RGBA, TextareaRenderable, MouseEvent, PasteEvent, decodePasteBytes, TextAttributes } from "@opentui/core"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
@@ -16,7 +16,7 @@ import { MessageID, PartID } from "@/session/schema"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
-import { assign } from "./part"
+import { assign, expandPlaceholders } from "./part"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -32,10 +32,12 @@ import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util"
 import { formatDuration } from "@/util/format"
+import { SessionRetry } from "@/session/retry"
 import { createColors, createFrames } from "../../ui/spinner.ts"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
@@ -43,7 +45,14 @@ import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceCreate, restoreWorkspaceSession } from "../dialog-workspace-create"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
+import { DialogAgreement, FREE_AGREEMENT_KEY, FREE_MODEL_IDS } from "../dialog-agreement"
 import { useArgs } from "@tui/context/args"
+import { resolveSkillSlash } from "@tui/i18n/skill"
+import {
+  isFreeApiModel,
+  isFreeApiSunset,
+  shouldBlockFreeApiRequest,
+} from "@tui/util/free-api-sunset"
 
 export type PromptProps = {
   sessionID?: string
@@ -125,8 +134,9 @@ export function Prompt(props: PromptProps) {
   const kv = useKV()
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const voiceEnabled = createMemo(() => kv.get("voice_enabled", false))
-  const voiceSendEnabled = createMemo(() => kv.get("voice_send_command", true))
+  const voiceSendEnabled = createMemo(() => kv.get("voice_send_command", false))
   const voiceControlEnabled = createMemo(() => kv.get("voice_control_enabled", false))
+  const currentProviderLabel = createMemo(() => local.model.parsed().provider)
   const [voiceState, setVoiceState] = createSignal<"idle" | "listening" | "speaking" | "processing" | "finishing">(
     activeVoice ? (activeVoice.pending > 0 ? "processing" : "listening") : "idle",
   )
@@ -187,7 +197,7 @@ export function Prompt(props: PromptProps) {
 
   function voiceSwitchAgent(name: string) {
     const match = local.agent.list().find((x) => x.name.toLowerCase() === name.toLowerCase())
-    if (match) local.agent.set(match.name)
+    if (match) local.agent.userSwitch(match.name)
     else toast.show({ message: t("tui.voice.error.unknown_agent", { name: name }), variant: "error", duration: 3000 })
   }
 
@@ -226,18 +236,24 @@ export function Prompt(props: PromptProps) {
       return
     }
     if (state === "finishing") return
-    // Start streaming
-    const xiaomi = sync.data.provider.find((p) => p.id === "xiaomi")
-    if (!xiaomi?.key) {
-      toast.show({ message: t("tui.voice.error.no_auth"), variant: "error" })
+    // Start streaming — only validate the active mode's provider
+    const voiceConfig = sync.data.config.voice
+    const resolved = Voice.resolveVoiceConfig(voiceConfig)
+    const activeConfig = voiceControlEnabled() ? resolved.control : resolved.asr
+    const creds = Voice.resolveCredentials(sync.data.provider, activeConfig)
+    if ("error" in creds) {
+      const vars = { provider: creds.providerID, model: creds.model }
+      const msg = !voiceConfig ? t("tui.voice.error.no_auth")
+        : creds.error === "not_found" ? t("tui.voice.error.provider_not_found", vars)
+        : creds.error === "no_url" ? t("tui.voice.error.no_url", vars)
+        : t("tui.voice.error.no_auth_provider", vars)
+      toast.show({ message: msg, variant: "error" })
       return
     }
     if (!Voice.isAvailable()) {
       toast.show({ message: t("tui.voice.error.no_recorder"), variant: "error" })
       return
     }
-    const apiKey = xiaomi.key
-    const baseUrl = (xiaomi.options?.baseURL as string) || "https://api.xiaomimimo.com/v1"
 
     const av: NonNullable<typeof activeVoice> = {
       handle: undefined!,
@@ -269,8 +285,9 @@ export function Prompt(props: PromptProps) {
 
               const ctrl = await Voice.processVoiceControl({
                 audio: segment.audio,
-                apiKey,
-                baseUrl,
+                apiKey: creds.apiKey,
+                baseUrl: creds.baseUrl,
+                model: resolved.control.model,
                 currentText,
                 currentAgent,
                 availableAgents,
@@ -292,15 +309,17 @@ export function Prompt(props: PromptProps) {
               }
             } finally {
               av.pending--
-              if (activeVoice === av) av.setState("listening")
+              if (activeVoice === av && voiceState() !== "speaking")
+                av.setState(av.pending > 0 ? "processing" : "listening")
               if (!activeVoice && av.pending <= 0) av.setState("idle")
             }
           }).catch(() => {})
         } else {
           Voice.transcribeAudio({
             audio: segment.audio,
-            apiKey,
-            baseUrl,
+            apiKey: creds.apiKey,
+            baseUrl: creds.baseUrl,
+            model: resolved.asr.model,
           }).then((text) => {
             if (text) {
               if (voiceSendEnabled() && Voice.SEND_RE.test(text.replace(/[\s。.!！？?，,]+$/g, "").trim())) {
@@ -312,11 +331,13 @@ export function Prompt(props: PromptProps) {
               av.showError(t("tui.voice.error.network"))
             }
             av.pending--
-            if (activeVoice === av) av.setState("listening")
+            if (activeVoice === av && voiceState() !== "speaking")
+              av.setState(av.pending > 0 ? "processing" : "listening")
             if (!activeVoice && av.pending <= 0) av.setState("idle")
           }).catch(() => {
             av.pending--
-            if (activeVoice === av) av.setState("listening")
+            if (activeVoice === av && voiceState() !== "speaking")
+              av.setState(av.pending > 0 ? "processing" : "listening")
             if (!activeVoice && av.pending <= 0) av.setState("idle")
           })
         }
@@ -324,8 +345,13 @@ export function Prompt(props: PromptProps) {
       onActiveChange: (active) => {
         if (active && activeVoice === av) av.setState("speaking")
       },
-      onError: () => {
-        av.showError(t("tui.voice.error.no_recorder"))
+      onError: (err) => {
+        const msg = err.message || ""
+        if (msg.includes("no default audio") || msg.includes("not found") || msg.includes("Cannot open") || msg.includes("ALSA")) {
+          av.showError(t("tui.voice.error.no_device"))
+        } else {
+          av.showError(`${t("tui.voice.error.recorder_failed")}: ${msg}`)
+        }
         activeVoice = undefined
         av.setState("idle")
       },
@@ -487,6 +513,11 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
+  // Derive sticky mode from whether session has messages
+  createEffect(() => {
+    local.agent.setSessionHasMessages(!!lastUserMessage())
+  })
+
   // Initialize agent/model/variant from last user message when session changes
   let syncedSessionID: string | undefined
   createEffect(() => {
@@ -495,7 +526,6 @@ export function Prompt(props: PromptProps) {
 
     if (sessionID !== syncedSessionID) {
       if (!sessionID || !msg) return
-
       syncedSessionID = sessionID
 
       // Only set agent if it's a primary agent (not a subagent)
@@ -687,6 +717,23 @@ export function Prompt(props: PromptProps) {
               }}
             />
           ))
+        },
+      },
+      {
+        title: t("tui.command.consent.revoke.title"),
+        value: "consent.revoke",
+        category: "prompt",
+        slash: {
+          name: "revoke-consent",
+        },
+        onSelect: (dialog) => {
+          kv.delete(FREE_AGREEMENT_KEY)
+          dialog.clear()
+          toast.show({
+            message: t("tui.consent.revoked"),
+            variant: "info",
+            duration: 3000,
+          })
         },
       },
       {
@@ -959,7 +1006,12 @@ export function Prompt(props: PromptProps) {
     },
   ])
 
+  // Enter triggers submit twice (the input_submit keybind plus the textarea's
+  // deferred onSubmit). This lock prevents the deferred call from re-entering
+  // while a dialog or async session-creation is in progress.
+  let submitLock = false
   async function submit() {
+    if (submitLock) return false
     setGhost("")
     // IME: double-defer may fire before onContentChange flushes the last
     // composed character (e.g. Korean hangul) to the store, so read
@@ -981,6 +1033,47 @@ export function Prompt(props: PromptProps) {
     const selectedModel = local.model.current()
     if (!selectedModel) {
       void promptModelWarning()
+      return false
+    }
+
+    const clientSlashSubmission =
+      store.mode !== "shell" && trimmed.startsWith("/") && command.slashes().some((slash) => slash.display === trimmed)
+    const modelClientSlash = ["/btw", "/compact", "/summarize"].includes(trimmed)
+    const freeApiSunset = isFreeApiSunset()
+    const sunsetFreeApi = freeApiSunset && isFreeApiModel(selectedModel)
+    if (
+      shouldBlockFreeApiRequest(selectedModel, {
+        sunset: freeApiSunset,
+        localOnly: clientSlashSubmission && !modelClientSlash,
+        shell: store.mode === "shell",
+      })
+    ) {
+      void DialogAlert.show(
+        dialog,
+        t("tui.dialog.free_api_sunset.title"),
+        t("tui.dialog.free_api_sunset.message"),
+      )
+      return false
+    }
+
+    // Free models require a one-time acknowledgment of the terms and privacy
+    // policy. Gate submission until the user accepts; the flag is stored in KV.
+    const isFreeModel = FREE_MODEL_IDS.has(selectedModel.modelID)
+    if (
+      isFreeModel &&
+      !kv.get(FREE_AGREEMENT_KEY) &&
+      !(sunsetFreeApi && ((clientSlashSubmission && !modelClientSlash) || store.mode === "shell"))
+    ) {
+      submitLock = true
+      DialogAgreement.show(dialog, {
+        onConfirm: () => {
+          kv.set(FREE_AGREEMENT_KEY, true)
+          void submit()
+        },
+        onClose: () => {
+          submitLock = false
+        },
+      })
       return false
     }
 
@@ -1012,7 +1105,27 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
+    submitLock = true
+    try {
+
     let sessionID = props.sessionID
+    // In orchestrator mode the single global root session was already resolved
+    // (find-or-create) on mode entry and stashed. Submitting from the home
+    // composer must land the first message INTO that root rather than creating a
+    // duplicate root session. Only applies when the composer has no bound
+    // sessionID (home view) and the current agent is orchestrator.
+    if (sessionID == null && agent.name === "orchestrator") {
+      const stashed = local.orchestrator.sessionID()
+      if (stashed) {
+        sessionID = stashed
+      } else {
+        // Root not resolved yet (mode-entry find-or-create still in flight).
+        // Do NOT fall through to session.create — that would spawn a duplicate
+        // orchestrator root. Ask the user to retry in a moment instead.
+        toast.show({ message: "Orchestrator session is still initializing, try again", variant: "warning" })
+        return false
+      }
+    }
     if (sessionID == null) {
       const res = await sdk.client.session.create({ workspace: props.workspaceID })
 
@@ -1031,23 +1144,20 @@ export function Prompt(props: PromptProps) {
     }
 
     const messageID = MessageID.ascending()
-    let inputText = store.prompt.input
 
-    // Expand pasted text inline before submitting
-    const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
-    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
-
-    for (const extmark of sortedExtmarks) {
-      const partIndex = store.extmarkToPartIndex.get(extmark.id)
-      if (partIndex !== undefined) {
+    // Expand pasted text inline before submitting. Extmark offsets are
+    // display-width based while plainText is UTF-16, so expandPlaceholders
+    // bridges the two coordinate systems (otherwise CJK content desyncs them).
+    const marks = input.extmarks
+      .getAllForTypeId(promptPartTypeId)
+      .flatMap((extmark: { id: number; start: number; end: number }) => {
+        const partIndex = store.extmarkToPartIndex.get(extmark.id)
+        if (partIndex === undefined) return []
         const part = store.prompt.parts[partIndex]
-        if (part?.type === "text" && part.text) {
-          const before = inputText.slice(0, extmark.start)
-          const after = inputText.slice(extmark.end)
-          inputText = before + part.text + after
-        }
-      }
-    }
+        if (part?.type !== "text" || !part.text) return []
+        return [{ start: extmark.start, end: extmark.end, text: part.text }]
+      })
+    const inputText = expandPlaceholders(store.prompt.input, marks)
 
     // Filter out text parts (pasted content) since they're now expanded inline
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
@@ -1058,6 +1168,12 @@ export function Prompt(props: PromptProps) {
 
     const clientSlash = inputText.startsWith("/")
       ? command.slashes().find((s) => s.display === inputText.trim())
+      : undefined
+    const serverSlash = inputText.startsWith("/")
+      ? iife(() => {
+          const name = inputText.split("\n")[0].split(" ")[0].slice(1)
+          return sync.data.command.find((item) => item.name === name)?.name ?? resolveSkillSlash(t, name, sync.data.command)
+        })
       : undefined
 
     if (store.mode === "shell") {
@@ -1071,16 +1187,44 @@ export function Prompt(props: PromptProps) {
         command: inputText,
       })
       setStore("mode", "normal")
+    } else if (inputText.startsWith("/btw ")) {
+      // Inline side-question form: `/btw <question>` on the prompt line. Client
+      // slashes match the exact `/btw` token and drop args, so handle the
+      // arg-bearing form here. Show a busy/spinner dialog immediately for
+      // instant feedback across the blocking fork-query, then swap in the
+      // answer. READ-ONLY + EPHEMERAL: render the answer in a dismissible
+      // dialog, never inject it into the conversation.
+      const question = inputText.slice("/btw ".length).trim()
+      if (question)
+        void DialogPrompt.busy(
+          dialog,
+          "/btw",
+          question,
+          (active) =>
+            sdk.client.session
+              .ask({
+                sessionID,
+                question,
+                providerID: selectedModel.providerID,
+                modelID: selectedModel.modelID,
+              })
+              .then((res) => {
+                if (!active()) return
+                return DialogAlert.show(dialog, "/btw", res.data?.answer ?? "(no answer)")
+              })
+              .catch((err) => {
+                if (!active()) return
+                dialog.clear()
+                toast.show({
+                  message: err instanceof Error ? err.message : "Failed to ask side question",
+                  variant: "error",
+                })
+              }),
+          { busyText: t("tui.command.session.ask.busy") },
+        )
     } else if (clientSlash) {
       clientSlash.onSelect?.()
-    } else if (
-      inputText.startsWith("/") &&
-      iife(() => {
-        const firstLine = inputText.split("\n")[0]
-        const command = firstLine.split(" ")[0].slice(1)
-        return sync.data.command.some((x) => x.name === command)
-      })
-    ) {
+    } else if (serverSlash) {
       // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
@@ -1090,7 +1234,7 @@ export function Prompt(props: PromptProps) {
 
       void sdk.client.session.command({
         sessionID,
-        command: command.slice(1),
+        command: serverSlash,
         arguments: args,
         agent: agent.name,
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
@@ -1150,6 +1294,10 @@ export function Prompt(props: PromptProps) {
       }, 50)
     input.clear()
     return true
+
+    } finally {
+      submitLock = false
+    }
   }
   const exit = useExit()
 
@@ -1215,6 +1363,11 @@ export function Prompt(props: PromptProps) {
           }
         }
         if (mime.startsWith("image/") || mime === "application/pdf") {
+          if (mime.startsWith("image/") && !activeModelSupportsImage()) {
+            insertFileReference(filepath)
+            toast.show({ message: t("tui.paste.image.fallback_path"), variant: "warning", duration: 5000 })
+            return
+          }
           const content = await Filesystem.readArrayBuffer(filepath)
             .then((buffer) => Buffer.from(buffer).toString("base64"))
             .catch(() => {})
@@ -1248,16 +1401,62 @@ export function Prompt(props: PromptProps) {
     }, 0)
   }
 
+  function activeModelSupportsImage() {
+    const current = local.model.current()
+    if (!current) return false
+    const provider = sync.data.provider.find((p) => p.id === current.providerID)
+    return provider?.models[current.modelID]?.capabilities?.input?.image ?? false
+  }
+
+  function insertFileReference(filepath: string) {
+    const filename = path.basename(filepath)
+    const currentOffset = input.visualCursor.offset
+    const extmarkStart = currentOffset
+    const virtualText = `@${filename}`
+    const extmarkEnd = extmarkStart + virtualText.length
+    input.insertText(virtualText + " ")
+    const extmarkId = input.extmarks.create({
+      start: extmarkStart,
+      end: extmarkEnd,
+      virtual: true,
+      styleId: fileStyleId,
+      typeId: promptPartTypeId,
+    })
+    setStore(
+      produce((draft) => {
+        const partIndex = draft.prompt.parts.length
+        draft.prompt.parts.push({
+          type: "file" as const,
+          mime: "text/plain",
+          filename,
+          url: `file://${filepath}`,
+          source: {
+            type: "file",
+            path: filepath,
+            text: { start: extmarkStart, end: extmarkEnd, value: virtualText },
+          },
+        })
+        draft.extmarkToPartIndex.set(extmarkId, partIndex)
+      }),
+    )
+  }
+
   async function pasteFromClipboard() {
     if (props.disabled) return
     const content = await Clipboard.read()
     if (!content) return
     if (content.mime.startsWith("image/")) {
-      await pasteAttachment({
-        filename: "clipboard",
-        mime: content.mime,
-        content: content.data,
-      })
+      if (activeModelSupportsImage()) {
+        await pasteAttachment({
+          filename: "clipboard",
+          mime: content.mime,
+          content: content.data,
+        })
+        return
+      }
+      const filepath = await Clipboard.spillImage(content)
+      insertFileReference(filepath)
+      toast.show({ message: t("tui.paste.image.fallback_path"), variant: "warning", duration: 5000 })
       return
     }
     await pastePlainText(content.data.replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
@@ -1395,6 +1594,7 @@ export function Prompt(props: PromptProps) {
         fileStyleId={fileStyleId}
         agentStyleId={agentStyleId}
         promptPartTypeId={() => promptPartTypeId}
+        onSubmit={() => void submit()}
       />
       <box ref={(r) => (anchor = r)} visible={props.visible !== false}>
         <box
@@ -1433,21 +1633,15 @@ export function Prompt(props: PromptProps) {
                   e.preventDefault()
                   return
                 }
-                // Check clipboard for images before terminal-handled paste runs.
-                // This helps terminals that forward Ctrl+V to the app; Windows
-                // Terminal 1.25+ usually handles Ctrl+V before this path.
+                // Handle Ctrl+V for terminals that forward it to the app as a raw
+                // keypress (common on macOS/Linux). The textarea has no built-in
+                // paste action, so without this nothing gets inserted. Terminals
+                // that handle paste natively (e.g. Windows Terminal 1.25+) emit a
+                // bracketed paste instead and never reach this path.
                 if (keybind.match("input_paste", e)) {
-                  const content = await Clipboard.read()
-                  if (content?.mime.startsWith("image/")) {
-                    e.preventDefault()
-                    await pasteAttachment({
-                      filename: "clipboard",
-                      mime: content.mime,
-                      content: content.data,
-                    })
-                    return
-                  }
-                  // If no image, let the default paste behavior continue
+                  e.preventDefault()
+                  await pasteFromClipboard()
+                  return
                 }
                 if (keybind.match("input_clear", e) && store.prompt.input !== "") {
                   input.clear()
@@ -1578,7 +1772,11 @@ export function Prompt(props: PromptProps) {
                   {(agent) => (
                     <>
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {store.mode === "shell"
+                          ? "Shell"
+                          : agent().name === "compose"
+                            ? `${Locale.titlecase(agent().name)} (legacy)`
+                            : Locale.titlecase(agent().name)}
                       </text>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
@@ -1589,6 +1787,12 @@ export function Prompt(props: PromptProps) {
                           >
                             {local.model.parsed().model}
                           </text>
+                          {/* Hide provider label for mimo-auto since model name already contains "MiMo" */}
+                          <Show when={!(local.model.current()?.providerID === "mimo" && local.model.current()?.modelID === "mimo-auto")}>
+                            <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>
+                              {currentProviderLabel()}
+                            </text>
+                          </Show>
                           <Show when={showVariant()}>
                             <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
                             <text>
@@ -1733,20 +1937,33 @@ export function Prompt(props: PromptProps) {
                       }
                     }
 
-                    const retryText = () => {
+                    // A rate-limit gets a clean, distinct label instead of the
+                    // raw provider message; other errors show the truncated
+                    // clean message. The attempt/countdown is a SEPARATE styled
+                    // status segment, not concatenated into the message string,
+                    // so it renders as structure rather than raw text. See T30.
+                    const isRateLimit = createMemo(() => {
+                      const r = retry()
+                      return r ? SessionRetry.isRateLimitMessage(r.message) : false
+                    })
+                    const label = createMemo(() => (isRateLimit() ? "Rate limited" : message()))
+                    const statusText = createMemo(() => {
                       const r = retry()
                       if (!r) return ""
-                      const baseMessage = message()
-                      const truncatedHint = isTruncated() ? " (click to expand)" : ""
                       const duration = formatDuration(seconds())
-                      const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
-                      return baseMessage + truncatedHint + retryInfo
-                    }
+                      return `attempt #${r.attempt}${duration ? ` · retrying in ${duration}` : " · retrying"}`
+                    })
 
                     return (
                       <Show when={retry()}>
-                        <box onMouseUp={handleMessageClick}>
-                          <text fg={theme.error}>{retryText()}</text>
+                        <box flexDirection="row" gap={1} onMouseUp={handleMessageClick}>
+                          <text fg={isRateLimit() ? theme.warning : theme.error} attributes={TextAttributes.BOLD}>
+                            {label()}
+                          </text>
+                          <Show when={isTruncated()}>
+                            <text fg={theme.textMuted}>(click to expand)</text>
+                          </Show>
+                          <text fg={theme.textMuted}>{statusText()}</text>
                         </box>
                       </Show>
                     )

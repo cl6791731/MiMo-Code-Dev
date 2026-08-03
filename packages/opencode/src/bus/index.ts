@@ -66,6 +66,7 @@ export const layer = Layer.effect(
 
         return { wildcard, typed }
       }),
+      { phase: "late" },
     )
 
     function getOrCreate<D extends BusEvent.Definition>(state: State, def: D) {
@@ -83,7 +84,7 @@ export const layer = Layer.effect(
       return Effect.gen(function* () {
         const s = yield* InstanceState.get(state)
         const payload: Payload = { type: def.type, properties }
-        log.info("publishing", { type: def.type })
+        log.debug("publishing", { type: def.type })
 
         const ps = s.typed.get(def.type)
         if (ps) yield* PubSub.publish(ps, payload)

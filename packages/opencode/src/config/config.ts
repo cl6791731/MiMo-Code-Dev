@@ -27,7 +27,9 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { zod, ZodOverride } from "@/util/effect-zod"
 import { ConfigAgent } from "./agent"
 import { ConfigCommand } from "./command"
+import { ConfigCompose } from "./compose"
 import { ConfigFormatter } from "./formatter"
+import { MIMOCODE_GITIGNORE_ENTRIES } from "./gitignore"
 import { ConfigHistory } from "./history"
 import { ConfigLayout } from "./layout"
 import { ConfigLSP } from "./lsp"
@@ -101,9 +103,10 @@ const InfoSchema = Schema.Struct({
     description: "Server configuration for mimo serve and web commands",
   }),
   command: Schema.optional(Schema.Record(Schema.String, ConfigCommand.Info)).annotate({
-    description: "Command configuration, see https://opencode.ai/docs/commands",
+    description: "Command configuration, see https://mimo.xiaomi.com/mimocode/commands",
   }),
   skills: Schema.optional(ConfigSkills.Info).annotate({ description: "Additional skill folder paths" }),
+  compose: Schema.optional(ConfigCompose.Info).annotate({ description: "Compose mode configuration" }),
   watcher: Schema.optional(
     Schema.Struct({
       ignore: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
@@ -137,6 +140,10 @@ const InfoSchema = Schema.Struct({
   }),
   small_model: Schema.optional(ConfigModelID).annotate({
     description: "Small model to use for tasks like title generation in the format of provider/model",
+  }),
+  vision_model: Schema.optional(ConfigModelID).annotate({
+    description:
+      "Model to use for image/vision subagent tasks in the format of provider/model. If unset, a vision-capable model is chosen automatically (in-house models preferred, then cheapest).",
   }),
   model_groups: Schema.optional(
     Schema.Record(
@@ -186,7 +193,7 @@ const InfoSchema = Schema.Struct({
       }),
       [Schema.Record(Schema.String, AgentRef)],
     ),
-  ).annotate({ description: "Agent configuration, see https://opencode.ai/docs/agents" }),
+  ).annotate({ description: "Agent configuration, see https://mimo.xiaomi.com/mimocode/agents" }),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),
@@ -300,6 +307,12 @@ const InfoSchema = Schema.Struct({
           open_notes: Schema.optional(PositiveInt).annotate({
             description: "Token cap for §11 Open notes section of checkpoint.md (writer-side budget validation). Default: 800.",
           }),
+          recent_user: Schema.optional(NonNegativeInt).annotate({
+            description: "Token cap for the recent user input section (verbatim user messages from the live DB, FIFO eviction). Default: 16000. Set 0 to disable.",
+          }),
+          recent_user_per_msg: Schema.optional(PositiveInt).annotate({
+            description: "Per-message cap inside recent user input section; oversized messages get head/tail truncation with messageID elision marker. Default: 2000.",
+          }),
         }),
       ).annotate({
         description:
@@ -353,6 +366,18 @@ const InfoSchema = Schema.Struct({
       }),
     }),
   ),
+  voice: Schema.optional(
+    Schema.Struct({
+      asr_model: Schema.optional(ConfigModelID).annotate({
+        description:
+          "Model to use for voice ASR transcription in provider/model format. Defaults to xiaomi/mimo-v2.5-asr.",
+      }),
+      control_model: Schema.optional(ConfigModelID).annotate({
+        description:
+          "Model to use for voice control (multimodal) in provider/model format. Defaults to xiaomi/mimo-v2.5.",
+      }),
+    }),
+  ).annotate({ description: "Voice input provider and model configuration." }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),
@@ -366,6 +391,22 @@ const InfoSchema = Schema.Struct({
       continue_loop_on_deny: Schema.optional(Schema.Boolean).annotate({
         description: "Continue the agent loop when a tool call is denied",
       }),
+      try_best: Schema.optional(
+        Schema.Struct({
+          edit_window: Schema.optional(PositiveInt).annotate({
+            description: "Recent edit events to compare (default 12).",
+          }),
+          edit_similarity: Schema.optional(Schema.Number).annotate({
+            description: "Jaccard threshold for near-identical edit detection (default 0.8).",
+          }),
+          edit_matches: Schema.optional(PositiveInt).annotate({
+            description: "Prior similar edits required before pausing (default 2).",
+          }),
+          action_streak: Schema.optional(PositiveInt).annotate({
+            description: "Consecutive edit or verify actions without progress before pausing (default 4).",
+          }),
+        }),
+      ).annotate({ description: "Try-best loop detector thresholds." }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
@@ -536,10 +577,16 @@ export const layer = Layer.effect(
       if (!("path" in options)) return data
 
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
-      if (!data.$schema) {
-        data.$schema = "https://opencode.ai/config.json"
-        const updated = text.replace(/^\s*\{/, '{\n  "$schema": "https://opencode.ai/config.json",')
-        yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
+      if (!data.$schema || data.$schema === "https://opencode.ai/config.json") {
+        data.$schema = "https://mimo.xiaomi.com/mimocode/config.json"
+        const edits = modify(text, ["$schema"], "https://mimo.xiaomi.com/mimocode/config.json", {
+          formattingOptions: { insertSpaces: true, tabSize: 2 },
+          isArrayInsertion: false,
+        })
+        if (edits.length) {
+          const updated = applyEdits(text, edits)
+          yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
+        }
       }
       return data
     })
@@ -566,13 +613,24 @@ export const layer = Layer.effect(
             .then(async (mod) => {
               const { provider, model, ...rest } = mod.default
               if (provider && model) result.model = `${provider}/${model}`
-              result["$schema"] = "https://opencode.ai/config.json"
+              result["$schema"] = "https://mimo.xiaomi.com/mimocode/config.json"
               result = mergeDeep(result, rest)
               await fsNode.writeFile(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
               await fsNode.unlink(legacy)
             })
             .catch(() => {}),
         )
+      }
+
+      // Seed a starter config when no global config file exists yet
+      const globalConfigFile = path.join(Global.Path.config, "mimocode.jsonc")
+      if (
+        !existsSync(path.join(Global.Path.config, "config.json")) &&
+        !existsSync(path.join(Global.Path.config, "mimocode.json")) &&
+        !existsSync(globalConfigFile)
+      ) {
+        const starter = '{\n  "$schema": "https://mimo.xiaomi.com/mimocode/config.json"\n}\n'
+        yield* fs.writeFileString(globalConfigFile, starter).pipe(Effect.catch(() => Effect.void))
       }
 
       return result
@@ -599,7 +657,7 @@ export const layer = Layer.effect(
         yield* fs
           .writeFileString(
             gitignore,
-            ["node_modules", "package.json", "package-lock.json", "bun.lock", ".gitignore"].join("\n"),
+            MIMOCODE_GITIGNORE_ENTRIES.join("\n"),
           )
           .pipe(
             Effect.catchIf(
@@ -716,7 +774,7 @@ export const layer = Layer.effect(
             }
             const wellknown = (yield* Effect.promise(() => response.json())) as { config?: Record<string, unknown> }
             const remoteConfig = wellknown.config ?? {}
-            if (!remoteConfig.$schema) remoteConfig.$schema = "https://opencode.ai/config.json"
+            if (!remoteConfig.$schema) remoteConfig.$schema = "https://mimo.xiaomi.com/mimocode/config.json"
             const source = `${url}/.well-known/opencode`
             const next = yield* loadConfig(JSON.stringify(remoteConfig), {
               dir: path.dirname(source),
@@ -884,6 +942,13 @@ export const layer = Layer.effect(
               mode: "primary" as const,
             },
           })
+        }
+
+        if (Flag.MIMOCODE_DANGEROUSLY_SKIP_PERMISSIONS) {
+          // Allow-all base, merged UNDER user config so an explicit deny still
+          // wins. Matches `mimo run --dangerously-skip-permissions`: auto-approve
+          // everything not explicitly denied.
+          result.permission = mergeDeep({ "*": "allow" } as ConfigPermission.Info, result.permission ?? {})
         }
 
         if (Flag.MIMOCODE_PERMISSION) {

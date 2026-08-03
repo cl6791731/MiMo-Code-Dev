@@ -26,11 +26,13 @@ import { AttachCommand } from "./cli/cmd/tui/attach"
 import { TuiThreadCommand } from "./cli/cmd/tui/thread"
 import { AcpCommand } from "./cli/cmd/acp"
 import { EOL } from "os"
-import { WebCommand } from "./cli/cmd/web"
+// Web command temporarily disabled
+// import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import path from "path"
+import { readdirSync, unlinkSync } from "fs"
 import { Global } from "./global"
 import { JsonMigration } from "./storage"
 import { Database } from "./storage"
@@ -164,6 +166,18 @@ const cli = yargs(args)
         Log.Default.warn("claude-import failed", { e: errorMessage(e) })
       }
     }
+
+    // Clean up stale .old_* files left by Windows in-place upgrades
+    if (process.platform === "win32") {
+      try {
+        const binDir = path.dirname(process.execPath)
+        for (const entry of readdirSync(binDir)) {
+          if (entry.startsWith("mimo.exe.old_")) {
+            try { unlinkSync(path.join(binDir, entry)) } catch {}
+          }
+        }
+      } catch {}
+    }
   })
   .usage("")
   .completion("completion", "generate shell completion script")
@@ -180,7 +194,8 @@ const cli = yargs(args)
   .command(UpgradeCommand)
   .command(UninstallCommand)
   .command(ServeCommand)
-  .command(WebCommand)
+  // Web command temporarily disabled
+  // .command(WebCommand)
   .command(ModelsCommand)
   .command(StatsCommand)
   .command(ExportCommand)

@@ -129,7 +129,7 @@ const state = {
   server: null as ReturnType<typeof Bun.serve> | null,
   queue: [] as Array<{
     path: string
-    response: Response | ((req: Request, capture: Capture) => Response)
+    response: Response | ((req: Request, capture: Capture) => Response | Promise<Response>)
     resolve: (value: Capture) => void
   }>,
 }
@@ -218,7 +218,7 @@ beforeAll(() => {
       }
 
       return typeof next.response === "function"
-        ? next.response(req, { url, headers: req.headers, body })
+        ? await next.response(req, { url, headers: req.headers, body })
         : next.response
     },
   })
@@ -675,6 +675,87 @@ describe("session.llm.stream", () => {
     })
   })
 
+  test("aborts an OpenAI request that stalls before response headers", async () => {
+    const server = state.server
+    if (!server) throw new Error("Server not initialized")
+
+    const source = await loadFixture("openai", "gpt-5.2")
+    const request = deferred<Capture>()
+    state.queue.push({
+      path: "/responses",
+      resolve: request.resolve,
+      response: async () => {
+        await Bun.sleep(500)
+        return createEventResponse([], true)
+      },
+    })
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "mimocode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: ["openai"],
+            provider: {
+              openai: {
+                npm: "@ai-sdk/openai",
+                api: "https://api.openai.com/v1",
+                models: { [source.model.id]: source.model },
+                options: {
+                  apiKey: "test-openai-key",
+                  baseURL: `${server.url.origin}/v1`,
+                  headerTimeout: 25,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await getModel(ProviderID.openai, ModelID.make(source.model.id))
+        const sessionID = SessionID.make("session-test-openai-header-timeout")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("user-openai-header-timeout"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.openai, modelID: resolved.id },
+        } satisfies MessageV2.User
+        const started = Date.now()
+        const events = await llm.runPromise((svc) =>
+          svc
+            .stream({
+              user,
+              sessionID,
+              model: resolved,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [{ role: "user", content: "Hello" }],
+              tools: {},
+              retries: 0,
+            })
+            .pipe(Stream.runCollect),
+        )
+
+        expect(Date.now() - started).toBeLessThan(400)
+        expect(Array.from(events).some((event) => event.type === "error")).toBe(true)
+        expect((await request.promise).url.pathname.endsWith("/responses")).toBe(true)
+      },
+    })
+  })
+
   test("accepts user image attachments as data URLs for OpenAI models", async () => {
     const server = state.server
     if (!server) {
@@ -917,6 +998,7 @@ describe("session.llm.stream", () => {
 
     const source = await loadFixture("anthropic", "claude-opus-4-6")
     const model = source.model
+    const pdf = "JVBERi0xLjQKJSVFT0YK"
     const chunks = [
       {
         type: "message_start",
@@ -1060,6 +1142,17 @@ describe("session.llm.stream", () => {
                   metadata: {},
                   title: "root",
                   time: { start: 10, end: 11 },
+                  attachments: [
+                    {
+                      id: "p_read_pdf",
+                      sessionID,
+                      messageID: "msg_call",
+                      type: "file",
+                      mime: "application/pdf",
+                      filename: "report.pdf",
+                      url: `data:application/pdf;base64,${pdf}`,
+                    },
+                  ],
                 },
               },
               {
@@ -1139,13 +1232,11 @@ describe("session.llm.stream", () => {
                 input: { filePath: "/root" },
               },
               {
+                cache_control: { type: "ephemeral" },
                 type: "tool_use",
                 id: "toolu_01APxrADs7VozN8uWzw9WwHr",
                 name: "glob",
                 input: { pattern: "**/*.pdf", path: "/root" },
-                cache_control: {
-                  type: "ephemeral",
-                },
               },
             ],
           },
@@ -1155,15 +1246,23 @@ describe("session.llm.stream", () => {
               {
                 type: "tool_result",
                 tool_use_id: "toolu_01N8mDEzG8DSTs7UPHFtmgCT",
-                content: "<path>/root</path>",
+                content: [
+                  { type: "text", text: "<path>/root</path>" },
+                  {
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: pdf,
+                    },
+                  },
+                ],
               },
               {
+                cache_control: { type: "ephemeral" },
                 type: "tool_result",
                 tool_use_id: "toolu_01APxrADs7VozN8uWzw9WwHr",
                 content: "No files found",
-                cache_control: {
-                  type: "ephemeral",
-                },
               },
             ],
           },

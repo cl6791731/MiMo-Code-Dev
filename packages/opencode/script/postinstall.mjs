@@ -49,8 +49,8 @@ function detectPlatformAndArch() {
 
 function findBinary() {
   const { platform, arch } = detectPlatformAndArch()
-  const packageName = `opencode-${platform}-${arch}`
-  const binaryName = platform === "windows" ? "opencode.exe" : "opencode"
+  const packageName = `@mimo-ai/mimocode-${platform}-${arch}`
+  const binaryName = platform === "windows" ? "mimo.exe" : "mimo"
 
   try {
     // Use require.resolve to find the package
@@ -68,19 +68,29 @@ function findBinary() {
   }
 }
 
-async function main() {
-  try {
-    if (os.platform() === "win32") {
-      // On Windows, the .exe is already included in the package and bin field points to it
-      // No postinstall setup needed
-      console.log("Windows detected: binary setup not needed (using packaged .exe)")
-      return
-    }
+function printMigrationNotice() {
+  const install = os.platform() === "win32"
+    ? "irm https://mimo.xiaomi.com/install.ps1 | iex"
+    : "curl -fsSL https://mimo.xiaomi.com/install | bash"
+  console.log()
+  console.log("  Recommended: install MiMoCode natively for a better install and upgrade experience:")
+  console.log(`    ${install}`)
+  console.log()
+}
 
-    // On non-Windows platforms, just verify the binary package exists
-    // Don't replace the wrapper script - it handles binary execution
+async function main() {
+  printMigrationNotice()
+
+  if (os.platform() === "win32") {
+    // On Windows the bin/mimo wrapper finds the binary via node_modules traversal.
+    // Skipping the .mimocode cache avoids creating an extensionless PE file that
+    // may trigger antivirus false-positives.
+    return
+  }
+
+  try {
     const { binaryPath } = findBinary()
-    const target = path.join(__dirname, "bin", ".opencode")
+    const target = path.join(__dirname, "bin", ".mimocode")
     if (fs.existsSync(target)) fs.unlinkSync(target)
     try {
       fs.linkSync(binaryPath, target)
@@ -89,7 +99,7 @@ async function main() {
     }
     fs.chmodSync(target, 0o755)
   } catch (error) {
-    console.error("Failed to setup opencode binary:", error.message)
+    console.error("Failed to setup mimocode binary:", error.message)
     process.exit(1)
   }
 }

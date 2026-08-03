@@ -1,10 +1,28 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 import {
+  CodexAuthPlugin,
   parseJwtClaims,
   extractAccountIdFromClaims,
   extractAccountId,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
+import type { PluginInput } from "@mimo-ai/plugin"
+
+const originalFetch = globalThis.fetch
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+})
+
+const fakeInput = {
+  client: {},
+  project: {},
+  worktree: "",
+  directory: "",
+  experimental_workspace: { register() {} },
+  serverUrl: new URL("http://localhost:4096"),
+  $: undefined,
+} as unknown as PluginInput
 
 function createTestJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
@@ -13,6 +31,54 @@ function createTestJwt(payload: object): string {
 }
 
 describe("plugin.codex", () => {
+  describe("loader", () => {
+    test("keeps all OpenAI models for OAuth", async () => {
+      const hooks = await CodexAuthPlugin(fakeInput)
+      const provider = {
+        models: {
+          "gpt-5.6-sol": { api: { id: "gpt-5.6-sol" }, cost: {} },
+          "gpt-4o": { api: { id: "gpt-4o" }, cost: {} },
+        },
+      }
+
+      await hooks.auth!.loader!(
+        async () => ({ type: "oauth", access: "access", refresh: "refresh", expires: Date.now() + 60_000 }),
+        provider as never,
+      )
+
+      expect(Object.keys(provider.models)).toEqual(["gpt-5.6-sol", "gpt-4o"])
+    })
+
+    test("forwards request cancellation while refreshing an expired token", async () => {
+      const signal = AbortSignal.timeout(25)
+      const signals: Array<AbortSignal | null | undefined> = []
+      globalThis.fetch = mock((_input, init) => {
+        signals.push(init?.signal)
+        return new Promise<Response>((_resolve, reject) => {
+          const requestSignal = init?.signal
+          if (requestSignal?.aborted) return reject(requestSignal.reason)
+          requestSignal?.addEventListener("abort", () => reject(requestSignal.reason), { once: true })
+        })
+      }) as unknown as typeof fetch
+      const hooks = await CodexAuthPlugin({
+        ...fakeInput,
+        client: { auth: { set: async () => undefined } },
+      } as unknown as PluginInput)
+      const options = await hooks.auth!.loader!(
+        async () => ({ type: "oauth", access: "", refresh: "refresh", expires: 0 }),
+        { models: {} } as never,
+      )
+
+      await expect(
+        options.fetch!("https://api.openai.com/v1/responses", {
+          signal,
+          headers: { authorization: "Bearer placeholder" },
+        }),
+      ).rejects.toThrow()
+      expect(signals).toContain(signal)
+    })
+  })
+
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
       const payload = { email: "test@example.com", chatgpt_account_id: "acc-123" }

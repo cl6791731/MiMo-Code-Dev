@@ -7,7 +7,7 @@ import { ProjectID } from "../../src/project/schema"
 import { SessionID } from "../../src/session/schema"
 import { Log } from "../../src/util"
 import { $ } from "bun"
-import { tmpdir } from "../fixture/fixture"
+import { tmpdir, withTmpdirOutsideGit } from "../fixture/fixture"
 import { Effect } from "effect"
 
 Log.init({ print: false })
@@ -25,8 +25,8 @@ function uid() {
   return SessionID.make(crypto.randomUUID())
 }
 
-function seed(opts: { id: SessionID; dir: string; project: ProjectID }) {
-  const now = Date.now()
+function seed(opts: { id: SessionID; dir: string; project: ProjectID; time?: number }) {
+  const now = opts.time ?? Date.now()
   Database.use((db) =>
     db
       .insert(SessionTable)
@@ -61,30 +61,32 @@ function ensureGlobal() {
 }
 
 describe("migrateFromGlobal", () => {
-  test("migrates global sessions on first project creation", async () => {
-    // 1. Start in a non-git directory — fromDirectory yields the "global" project ID.
-    await using tmp = await tmpdir()
-    const { project: pre } = await run((svc) => svc.fromDirectory(tmp.path))
-    expect(pre.id).toBe(ProjectID.global)
+  test("migrates global sessions on first project creation", () =>
+    withTmpdirOutsideGit(async () => {
+      // 1. Start in a non-git directory — fromDirectory yields the "global" project ID.
+      await using tmp = await tmpdir()
+      const { project: pre } = await run((svc) => svc.fromDirectory(tmp.path))
+      expect(pre.id).toBe(ProjectID.global)
 
-    // 2. Seed a session under "global" with matching directory
-    const id = uid()
-    seed({ id, dir: tmp.path, project: ProjectID.global })
+      // 2. Seed a session under "global" with matching directory
+      const id = uid()
+      seed({ id, dir: tmp.path, project: ProjectID.global })
 
-    // 3. Initialise git so the project gets a real (UUID) ID
-    await $`git init`.cwd(tmp.path).quiet()
-    await $`git config user.name "Test"`.cwd(tmp.path).quiet()
-    await $`git config user.email "test@opencode.test"`.cwd(tmp.path).quiet()
-    await $`git config commit.gpgsign false`.cwd(tmp.path).quiet()
+      // 3. Initialise git so the project gets a real (UUID) ID
+      await $`git init`.cwd(tmp.path).quiet()
+      await $`git config user.name "Test"`.cwd(tmp.path).quiet()
+      await $`git config user.email "test@opencode.test"`.cwd(tmp.path).quiet()
+      await $`git config commit.gpgsign false`.cwd(tmp.path).quiet()
 
-    const { project: real } = await run((svc) => svc.fromDirectory(tmp.path))
-    expect(real.id).not.toBe(ProjectID.global)
+      const { project: real } = await run((svc) => svc.fromDirectory(tmp.path))
+      expect(real.id).not.toBe(ProjectID.global)
 
-    // 4. The session should have been migrated to the real project ID
-    const row = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, id)).get())
-    expect(row).toBeDefined()
-    expect(row!.project_id).toBe(real.id)
-  })
+      // 4. The session should have been migrated to the real project ID
+      const row = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, id)).get())
+      expect(row).toBeDefined()
+      expect(row!.project_id).toBe(real.id)
+    }),
+  )
 
   test("migrates global sessions even when project row already exists", async () => {
     // 1. Create a repo with a commit — real project ID created immediately
@@ -146,5 +148,32 @@ describe("migrateFromGlobal", () => {
     expect(row).toBeDefined()
     // Should remain under "global" — not stolen
     expect(row!.project_id).toBe(ProjectID.global)
+  })
+
+  test("preserves time_updated when migrating (re-parent is bookkeeping, not activity)", async () => {
+    // Regression: the schema's $onUpdate hook injects time_updated=Date.now()
+    // into every UPDATE, so the re-parent used to flatten the recency of every
+    // migrated session to one identical timestamp — scrambling recency-ordered
+    // session lists (newest conversations sank below older ones).
+    await using tmp = await tmpdir({ git: true })
+    const { project } = await run((svc) => svc.fromDirectory(tmp.path))
+    expect(project.id).not.toBe(ProjectID.global)
+
+    ensureGlobal()
+
+    const old = uid()
+    const older = uid()
+    const oldTime = Date.now() - 7 * 24 * 60 * 60 * 1000
+    seed({ id: old, dir: tmp.path, project: ProjectID.global, time: oldTime })
+    seed({ id: older, dir: tmp.path, project: ProjectID.global, time: oldTime - 60_000 })
+
+    await run((svc) => svc.fromDirectory(tmp.path))
+
+    const rows = Database.use((db) =>
+      db.select().from(SessionTable).where(eq(SessionTable.project_id, project.id)).all(),
+    )
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    expect(byId.get(old)?.time_updated).toBe(oldTime)
+    expect(byId.get(older)?.time_updated).toBe(oldTime - 60_000)
   })
 })

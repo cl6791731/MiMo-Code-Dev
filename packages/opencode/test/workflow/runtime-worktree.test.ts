@@ -1,6 +1,6 @@
 import { $ } from "bun"
 import { describe, expect, afterEach } from "bun:test"
-import { Effect } from "effect"
+import { Deferred, Effect } from "effect"
 import * as fsp from "fs/promises"
 import * as path from "path"
 import { Session } from "../../src/session"
@@ -38,7 +38,7 @@ describe("WorkflowRuntime worktree isolation", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         })
         // The single agent writes a relative file (one tool call), then ends its turn.
-        yield* llm.tool("write", { filePath: "port.rs", content: "// rust" })
+        yield* llm.tool("write", { file_path: "port.rs", content: "// rust" })
         yield* llm.text("done")
         // A worktree is a fresh checkout of HEAD; uncommitted files (like the
         // fixture's mimocode.json provider config) do NOT propagate. Commit it so
@@ -55,6 +55,18 @@ describe("WorkflowRuntime worktree isolation", () => {
         // Changed worktree -> result is enveloped with _worktree carrying the dir.
         expect(result?._worktree?.directory).toBeTruthy()
         const wtDir = result._worktree.directory as string
+        let initialized = 0
+        yield* Effect.promise(() =>
+          Instance.provide({
+            directory: wtDir,
+            init: () => {
+              initialized++
+              return Promise.resolve()
+            },
+            fn: () => undefined,
+          }),
+        )
+        expect(initialized).toBe(1)
         // The edit is in the worktree, NOT the parent project dir.
         expect(yield* Effect.promise(() => fileExists(`${wtDir}/port.rs`))).toBe(true)
         expect(yield* Effect.promise(() => fileExists(`${dir}/port.rs`))).toBe(false)
@@ -120,9 +132,9 @@ describe("WorkflowRuntime worktree isolation", () => {
         // that distinct worktrees keep them from clobbering each other.
         const isA = (h: { body: unknown }) => JSON.stringify(h.body).includes("WF_TASK_ONE")
         const isB = (h: { body: unknown }) => JSON.stringify(h.body).includes("WF_TASK_TWO")
-        yield* llm.toolMatch(isA, "write", { filePath: "port.rs", content: "// one" })
+        yield* llm.toolMatch(isA, "write", { file_path: "port.rs", content: "// one" })
         yield* llm.textMatch(isA, "done")
-        yield* llm.toolMatch(isB, "write", { filePath: "port.rs", content: "// two" })
+        yield* llm.toolMatch(isB, "write", { file_path: "port.rs", content: "// two" })
         yield* llm.textMatch(isB, "done")
         yield* Effect.promise(() => $`git add -A && git commit -q -m wf-config`.cwd(dir).quiet().nothrow())
         const script = [
@@ -158,7 +170,11 @@ describe("WorkflowRuntime worktree isolation", () => {
           title: "wf isolate cancel",
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         })
-        yield* llm.hang // the isolated agent hangs so it is in-flight at cancel time
+        // Controllable hang: agent parks on a Deferred, not Stream.never.
+        // Fiber.interrupt unwinds Deferred.await at the Effect level (no TCP
+        // cleanup), so cancel is fast and deterministic under any load.
+        const release = yield* Deferred.make<void>()
+        yield* llm.hangUntil(release)
         yield* Effect.promise(() => $`git add -A && git commit -q -m wf-config`.cwd(dir).quiet().nothrow())
         const script = [
           `export const meta = { name: "t", description: "d" }`,
@@ -166,13 +182,9 @@ describe("WorkflowRuntime worktree isolation", () => {
         ].join("\n")
         const { runID } = yield* runtime.start({ script, sessionID: parent.id, parentActorID: "main", model: ref })
         yield* Effect.sleep("600 millis") // let the worktree get created + agent spawn
-        // The in-flight worktree dir is not surfaced to the test (the agent hung
-        // before returning an envelope), so a deterministic filesystem assertion is
-        // not available. The reliable guard is that cancel COMPLETES without throwing
-        // (it now calls worktree.remove for the in-flight worktree, best-effort) and
-        // the run lands cancelled — a regression where cancel throws on worktree
-        // removal would fail right here.
         yield* runtime.cancel({ runID })
+        // Release the hang so the agent unwinds cleanly (no leaked fiber).
+        yield* Deferred.succeed(release, undefined)
         const s = yield* runtime.status({ runID })
         expect(s.status).toBe("cancelled")
       }),

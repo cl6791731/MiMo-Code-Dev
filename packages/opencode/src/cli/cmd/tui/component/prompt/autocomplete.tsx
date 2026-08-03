@@ -6,15 +6,22 @@ import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Sh
 import { createStore } from "solid-js/store"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
+import { useLocal } from "@tui/context/local"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
 import { useTheme, selectedForeground } from "@tui/context/theme"
 import { SplitBorder } from "@tui/component/border"
 import { useCommandDialog } from "@tui/component/dialog-command"
+import { useLanguage } from "@tui/context/language"
+import { slashCommandDescription } from "@tui/i18n/slash-command"
+import { skillDescription, skillSlashAliases } from "@tui/i18n/skill"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "@/util"
+import { Flag } from "@/flag/flag"
 import type { PromptInfo } from "./history"
 import { useFrecency } from "./frecency"
+import { detectTrigger, exactSubmitOption } from "./autocomplete-detect"
+import { charAfterCursor, tokenEndWidth } from "./offset"
 
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
@@ -58,6 +65,7 @@ export type AutocompleteOption = {
   display: string
   value?: string
   aliases?: string[]
+  submitOnSelect?: boolean
   disabled?: boolean
   description?: string
   isDirectory?: boolean
@@ -76,10 +84,13 @@ export function Autocomplete(props: {
   fileStyleId: number
   agentStyleId: number
   promptPartTypeId: () => number
+  onSubmit: () => void
 }) {
   const sdk = useSDK()
   const sync = useSync()
+  const local = useLocal()
   const command = useCommandDialog()
+  const lang = useLanguage()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
@@ -155,8 +166,7 @@ export function Autocomplete(props: {
     const input = props.input()
     const currentCursorOffset = input.cursorOffset
 
-    const charAfterCursor = props.value.at(currentCursorOffset)
-    const needsSpace = charAfterCursor !== " "
+    const needsSpace = charAfterCursor(props.value, currentCursorOffset) !== " "
     const append = prefix + text + (needsSpace ? " " : "")
 
     input.cursorOffset = store.index
@@ -360,23 +370,56 @@ export function Autocomplete(props: {
       )
   })
 
+  const [skillMap] = createResource(
+    () => store.visible === "/" || undefined,
+    async () => {
+      const result = await sdk.client.app.skills()
+      return new Map((result.data ?? []).map((s) => [s.name, s]))
+    },
+  )
+
   const commands = createMemo((): AutocompleteOption[] => {
     const results: AutocompleteOption[] = [...command.slashes()]
 
+    const isCompose = local.agent.current()?.name === "compose"
+    const skills = skillMap()
     for (const serverCommand of sync.data.command) {
-      if (serverCommand.source === "skill") continue
+      if (serverCommand.source === "skill" && Flag.MIMOCODE_DISABLE_SLASH_SKILLS) continue
+      if (serverCommand.source === "skill" && !isCompose && serverCommand.name.startsWith("compose:")) continue
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
+      const info = serverCommand.source === "skill" ? skills?.get(serverCommand.name) : undefined
+      const desc = info
+        ? skillDescription(lang.t, info.name, info.description, info.bundled)
+        : slashCommandDescription(lang.t, serverCommand.name, serverCommand.description)
+      const select = () => {
+        const input = props.input()
+        const needsSpace = charAfterCursor(props.value, input.cursorOffset) !== " "
+        const append = "/" + serverCommand.name + (needsSpace ? " " : "")
+
+        // clearTriggerRange() already deleted the token and set cursor to store.index,
+        // so start === end here (no-op delete). Kept for robustness if called from other paths.
+        const currentCursorOffset = input.cursorOffset
+        input.cursorOffset = store.index
+        const startCursor = input.logicalCursor
+        input.cursorOffset = currentCursorOffset
+        const endCursor = input.logicalCursor
+
+        input.deleteRange(startCursor.row, startCursor.col, endCursor.row, endCursor.col)
+        input.insertText(append)
+      }
       results.push({
         display: "/" + serverCommand.name + label,
-        description: serverCommand.description,
-        onSelect: () => {
-          const newText = "/" + serverCommand.name + " "
-          const cursor = props.input().logicalCursor
-          props.input().deleteRange(0, 0, cursor.row, cursor.col)
-          props.input().insertText(newText)
-          props.input().cursorOffset = Bun.stringWidth(newText)
-        },
+        description: desc,
+        onSelect: select,
       })
+      results.push(
+        ...skillSlashAliases(lang.t, serverCommand.name, serverCommand.bundled).map((alias) => ({
+          display: "/" + alias,
+          description: desc,
+          onSelect: select,
+          submitOnSelect: true,
+        })),
+      )
     }
 
     results.sort((a, b) => a.display.localeCompare(b.display))
@@ -458,9 +501,10 @@ export function Autocomplete(props: {
     }
   }
 
-  function select() {
-    const selected = options()[store.selected]
+  function select(option = options()[store.selected]) {
+    const selected = option
     if (!selected) return
+    clearTriggerRange()
     hide()
     selected.onSelect?.()
   }
@@ -495,17 +539,24 @@ export function Autocomplete(props: {
   }
 
   function hide() {
-    const text = props.input().plainText
-    if (store.visible === "/" && !text.endsWith(" ") && text.startsWith("/")) {
-      const cursor = props.input().logicalCursor
-      props.input().deleteRange(0, 0, cursor.row, cursor.col)
-      // Sync the prompt store immediately since onContentChange is async
-      props.setPrompt((draft) => {
-        draft.input = props.input().plainText
-      })
-    }
     command.keybinds(true)
     setStore("visible", false)
+  }
+
+  function clearTriggerRange() {
+    if (store.visible !== "/") return
+    const input = props.input()
+    const endWidth = tokenEndWidth(input.plainText, store.index)
+
+    input.cursorOffset = store.index
+    const startCursor = input.logicalCursor
+    input.cursorOffset = endWidth
+    const endCursor = input.logicalCursor
+    input.deleteRange(startCursor.row, startCursor.col, endCursor.row, endCursor.col)
+    input.cursorOffset = store.index
+    props.setPrompt((draft) => {
+      draft.input = input.plainText
+    })
   }
 
   onMount(() => {
@@ -519,41 +570,19 @@ export function Autocomplete(props: {
             // Typed text before the trigger
             props.input().cursorOffset <= store.index ||
             // There is a space between the trigger and the cursor
-            props.input().getTextRange(store.index, props.input().cursorOffset).match(/\s/) ||
-            // "/<command>" is not the sole content
-            (store.visible === "/" && value.match(/^\S+\s+\S+\s*$/))
+            props.input().getTextRange(store.index, props.input().cursorOffset).match(/\s/)
           ) {
             hide()
           }
           return
         }
 
-        // Check if autocomplete should reopen (e.g., after backspace deleted a space)
-        const offset = props.input().cursorOffset
-        if (offset === 0) return
-
-        // Check for "/" at position 0 - reopen slash commands
-        if (value.startsWith("/") && !value.slice(0, offset).match(/\s/)) {
-          show("/")
-          setStore("index", 0)
-          return
-        }
-
-        // Check for "@" (files) or "$" (agents) trigger - find the nearest one before
-        // the cursor with no whitespace between it and the cursor.
-        const text = value.slice(0, offset)
-        const atIdx = text.lastIndexOf("@")
-        const dollarIdx = text.lastIndexOf("$")
-        const idx = Math.max(atIdx, dollarIdx)
-        if (idx === -1) return
-
-        const trigger = idx === dollarIdx ? "$" : "@"
-        const between = text.slice(idx)
-        const before = idx === 0 ? undefined : value[idx - 1]
-        if ((before === undefined || /\s/.test(before)) && !between.match(/\s/)) {
-          show(trigger)
-          setStore("index", idx)
-        }
+        // Check if autocomplete should reopen (e.g., after backspace deleted a space).
+        // detectTrigger works in width coordinates so CJK before/after the trigger stays correct.
+        const trigger = detectTrigger(value, props.input().cursorOffset)
+        if (!trigger) return
+        show(trigger.kind)
+        setStore("index", trigger.index)
       },
       onKeyDown(e: KeyEvent) {
         if (store.visible) {
@@ -575,13 +604,20 @@ export function Autocomplete(props: {
             return
           }
           if (name === "escape") {
+            clearTriggerRange()
             hide()
             e.preventDefault()
             return
           }
           if (name === "return") {
-            select()
+            const exact = exactSubmitOption(
+              store.visible,
+              props.input().getTextRange(store.index + 1, props.input().cursorOffset),
+              options(),
+            )
+            select(exact)
             e.preventDefault()
+            if (exact) setTimeout(props.onSubmit, 0)
             return
           }
           if (name === "tab") {

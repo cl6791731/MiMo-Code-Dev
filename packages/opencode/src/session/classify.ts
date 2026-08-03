@@ -11,6 +11,7 @@ import { MessageV2 } from "./message-v2"
 export type StepClassification =
   | { type: "final"; degraded?: boolean }
   | { type: "continue" }
+  | { type: "text-tool-call" }
   | { type: "filtered" }
   | { type: "think-only" }
   | { type: "invalid"; reason: string }
@@ -34,7 +35,7 @@ export function classifyAssistantStep(input: {
   parts: MessageV2.Part[]
   phase: "existing-assistant" | "after-process"
   // Reserved for T01–T05 (stop/overflow control flow stays in runLoop for T00).
-  processResult?: "continue" | "stop" | "overflow"
+  processResult?: "continue" | "stop" | "overflow" | "text-repeat"
 }): StepClassification {
   const assistant = input.assistant
 
@@ -57,6 +58,30 @@ export function classifyAssistantStep(input: {
 
   // 2. Nothing finalized yet.
   if (!assistant.finish) return { type: "continue" }
+
+  // 3a. Text-form tool call: the model serialized a tool call as PROSE TEXT
+  // instead of emitting a structured tool_use. Signature: finish "tool-calls"
+  // but NO structured tool part (a real tool part would have re-looped at #1)
+  // and text carrying tool-call markup. Must precede the unconditional
+  // tool-calls continue below, which would otherwise swallow this state.
+  // Guards: skip if this turn was already discarded (assistant.error set — let
+  // it fall through to `failed` at #5), and skip a stale/resumed turn the
+  // conversation already moved past (mirrors the #4 staleness guard) so a
+  // degraded turn left in history can't re-fire across turns/resumes.
+  if (
+    assistant.finish === "tool-calls" &&
+    !assistant.error &&
+    input.lastUser.id < assistant.id &&
+    !input.parts.some((part) => part.type === "tool") &&
+    input.parts.some(
+      (part) =>
+        part.type === "text" &&
+        !part.synthetic &&
+        !part.ignored &&
+        /<invoke name=|<parameter name=|<\/invoke>|<function_calls>/.test(part.text),
+    )
+  )
+    return { type: "text-tool-call" }
 
   // 3. Provider-executed-only tool step (no client tool part left, see #1).
   if (assistant.finish === "tool-calls") return { type: "continue" }
@@ -86,7 +111,13 @@ export function classifyAssistantStep(input: {
     )
   )
     return assistant.finish === "other" ? { type: "final", degraded: true } : { type: "final" }
-  if (input.parts.some((part) => part.type === "reasoning" && part.text.trim().length > 0))
+  if (input.parts.some((part) => part.type === "reasoning" && part.text.trim().length > 0)) {
+    // GPT reasoning models may legitimately end a step with reasoning and no
+    // separate text part. Match upstream termination semantics for that family
+    // without weakening think-only recovery for other reasoning models.
+    if (/(^|\/)gpt-\d/i.test(assistant.modelID))
+      return assistant.finish === "other" ? { type: "final", degraded: true } : { type: "final" }
     return { type: "think-only" }
+  }
   return { type: "invalid", reason: "empty output" }
 }

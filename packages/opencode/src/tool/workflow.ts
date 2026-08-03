@@ -1,13 +1,37 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./workflow.txt"
 import z from "zod"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { Config } from "../config"
+import { ConfigCompose } from "../config"
+import { InstanceState } from "@/effect"
 import { workflowRef } from "@/workflow/runtime-ref"
 import { BuiltinWorkflow } from "@/workflow/builtin"
+import { ActorRegistry } from "@/actor/registry"
 import type { SessionID } from "../session/schema"
 
 const id = "workflow"
+
+// Mirror compose.js arg normalization: a bare task string OR a JSON string both
+// collapse to an object. Used so host-side docs-dir injection can merge into args
+// regardless of how the caller serialized them.
+function parseComposeArgString(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw)
+    if (typeof parsed === "object" && parsed !== null) return parsed as Record<string, unknown>
+  } catch {}
+  return { task: raw }
+}
+
+// Normalize a bare string arg into an args object with a `question` field.
+// Mirrors parseComposeArgString but maps to {question} instead of {task}.
+function parseArgsAsQuestion(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw)
+    if (typeof parsed === "object" && parsed !== null) return parsed as Record<string, unknown>
+  } catch {}
+  return { question: raw }
+}
 
 const runSchema = z.strictObject({
   operation: z.literal("run"),
@@ -25,12 +49,23 @@ const runSchema = z.strictObject({
     .describe(
       "(optional) Inline JS workflow script; must begin with `export const meta = {...}`. Provide EITHER name OR script, not both.",
     ),
-  args: z.any().optional().describe("(optional) JSON value exposed to the script as `args`."),
+  args: z
+    .any()
+    .optional()
+    .describe(
+      "(optional) Input value exposed to the script as the global `args`, verbatim. Pass objects/arrays as ACTUAL JSON values — NOT as a JSON string. e.g. args: { theme: \"...\", signals: { trademark: \"required\" } }, never args: \"{ \\\"theme\\\": ... }\".",
+    ),
   workspace: z
     .string()
     .optional()
     .describe(
       "(optional) Absolute dir the script's file primitives (readFile/writeFile/glob/exists) are jailed to. Defaults to the project worktree.",
+    ),
+  async: z
+    .boolean()
+    .optional()
+    .describe(
+      "(optional) When true, return a run_id immediately and let the workflow run in the background; the result arrives later as an inbox notification. Default false: block until terminal and return the transcript inline (skill-like semantics, recommended for short workflows).",
     ),
 })
 const statusSchema = z.strictObject({ operation: z.literal("status"), run_id: z.string().min(1) })
@@ -50,12 +85,44 @@ export const parameters = z.discriminatedUnion("operation", [
   resumeSchema,
 ])
 
-type Metadata = { runID?: string; status?: string }
+type TranscriptEntry = { kind: "phase" | "log"; text: string }
+// `counters` and `currentPhase` are streamed in each flush so the inline
+// conversation panel shows live progress without polling: the bus run row only
+// carries counters via loadWorkflows (which only the /workflows dialog polls), so
+// without this the in-conversation panel would sit at 0✓ 0✗ 0⟳ for the whole run.
+type Metadata = {
+  runID?: string
+  status?: string
+  transcript?: TranscriptEntry[]
+  counters?: { running: number; succeeded: number; failed: number }
+  currentPhase?: string
+}
 
-export const WorkflowTool = Tool.define<typeof parameters, Metadata, Config.Service>(
+// Bound the transcript that gets surfaced to the model (tool output) AND persisted
+// to part-state metadata AND streamed in each flush. A chatty workflow
+// (deep-research emits a phase + log per source) can otherwise feed tens of KB into
+// the model's context, grow the session file without bound, and — because each
+// flush pushes a full snapshot through ctx.metadata — make streaming O(N²) in event
+// count. Capping the snapshot to head + tail keeps every flush O(1) (so total
+// streamed bytes are O(run duration), not O(N²)) and the persisted/displayed view
+// bounded, while still showing the start and the most-recent activity.
+const TRANSCRIPT_HEAD = 40
+const TRANSCRIPT_TAIL = 160
+function capTranscript(t: readonly TranscriptEntry[]): TranscriptEntry[] {
+  if (t.length <= TRANSCRIPT_HEAD + TRANSCRIPT_TAIL + 1) return t.slice()
+  const omitted = t.length - TRANSCRIPT_HEAD - TRANSCRIPT_TAIL
+  return [
+    ...t.slice(0, TRANSCRIPT_HEAD),
+    { kind: "log", text: `…(${omitted} lines omitted)` },
+    ...t.slice(t.length - TRANSCRIPT_TAIL),
+  ]
+}
+
+export const WorkflowTool = Tool.define<typeof parameters, Metadata, Config.Service | ActorRegistry.Service>(
   id,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const actorRegistry = yield* ActorRegistry.Service
 
     // Resolve the WorkflowRuntime through the late-bound workflowRef rather than as
     // a Layer dependency: pulling WorkflowRuntime.Service in here would push that
@@ -73,6 +140,51 @@ export const WorkflowTool = Tool.define<typeof parameters, Metadata, Config.Serv
       }
       return Effect.succeed(runtime)
     }
+
+    // Thread the operator-configured compose docs dir into the `compose` built-in's
+    // args, mirroring the `<compose_docs_dir>` block prompt.ts injects for the
+    // interactive compose agent. The compose guest reads `args._composeDocsDir` and
+    // tells its plan/report subagents where to write specs/plans/reports. We
+    // normalize args the same way compose.js does (object | JSON-string | bare task
+    // string) so the injection survives the AI-SDK string-serialization boundary.
+    const enrichComposeArgs = (raw: unknown) =>
+      Effect.gen(function* () {
+        const ctx = yield* InstanceState.context
+        const docs = ConfigCompose.resolveDocsDir(ctx.worktree, (yield* config.get()).compose)
+        const base =
+          typeof raw === "object" && raw !== null
+            ? (raw as Record<string, unknown>)
+            : typeof raw === "string"
+              ? parseComposeArgString(raw)
+              : {}
+        return { ...base, _composeDocsDir: docs }
+      })
+
+    // Normalize and enrich args for the deep-research built-in:
+    //   - bare string args → { question: <string> }  (mirrors compose's parseComposeArgString)
+    //   - inject today (YYYY-MM-DD) from host Date  (the sandbox strips Date for determinism)
+    //   - inject dir = workspace root  (so agent writes and sandbox exists checks resolve
+    //     to the same location — the root cause of the "brief.md not created" bug was
+    //     dir ≠ workspaceRoot causing a path mismatch between agent writes and exists checks)
+    const enrichDeepResearchArgs = (raw: unknown, workspace?: string) =>
+      Effect.gen(function* () {
+        const ctx = yield* InstanceState.context
+        const resolvedWorkspace = workspace ?? ctx.worktree
+        const base =
+          typeof raw === "object" && raw !== null
+            ? { ...(raw as Record<string, unknown>) }
+            : typeof raw === "string"
+              ? parseArgsAsQuestion(raw)
+              : {}
+        // dir must equal the workspace root: the sandbox file primitives (exists,
+        // writeFile, readFile, glob) are jailed there, and the script's agent
+        // prompts reference ${dir}/... for file paths. Mismatched dir was the root
+        // cause of "brief.md not created" — the agent wrote to ${dir}/brief.md
+        // while exists checked ${workspaceRoot}/brief.md.
+        if (!base.dir) base.dir = resolvedWorkspace
+        if (!base.today) base.today = new Date().toISOString().slice(0, 10)
+        return base
+      })
 
     const run = Effect.fn("WorkflowTool.execute")(function* (
       input: z.infer<typeof parameters>,
@@ -104,19 +216,159 @@ export const WorkflowTool = Tool.define<typeof parameters, Metadata, Config.Serv
             ),
           )
         }
+        // Is a human attached to answer the workflow's up-front manifest
+        // permission ask? A workflow launched from an interactive session actor
+        // (foreground turn, no registered background actor) can prompt the human;
+        // one launched from a BACKGROUND subagent/system actor cannot, so the
+        // engine must ask non-interactively (fail closed) or it would hang forever
+        // on a reply no one can give. Mirrors decideAskRouting's `!askActor.background`:
+        // resolve the launching actor and treat a background actor as non-interactive.
+        // Absent actorID (the main foreground turn) => no background actor => interactive.
+        const askActor = ctx.actorID
+          ? yield* actorRegistry.get(ctx.sessionID as SessionID, ctx.actorID).pipe(Effect.orElseSucceed(() => undefined))
+          : undefined
+        const interactive = !askActor?.background
         const started = yield* runtime.start({
           script,
           sessionID: ctx.sessionID as SessionID,
           parentActorID: ctx.agent ?? "main",
-          args: input.args,
+          args: input.name === "compose"
+            ? yield* enrichComposeArgs(input.args)
+            : input.name === "deep-research"
+              ? yield* enrichDeepResearchArgs(input.args, input.workspace)
+              : input.args,
           workspace: input.workspace,
           maxConcurrentAgents: cfg.workflow?.maxConcurrentAgents,
           scriptDeadlineMs: cfg.workflow?.scriptDeadlineMs,
+          interactive,
+          // Only the async (background) path relies on the inbox notification; the
+          // sync path below returns the result inline, so suppress the duplicate.
+          notifyOnTerminal: input.async === true,
         })
+        const runID = started.runID
+        const label = input.name ?? "inline"
+
+        // Async opt-out: legacy fire-and-forget semantic. Returns the run_id
+        // immediately and lets the workflow keep running in the background; the
+        // terminal result arrives later as an inbox notification on the parent's
+        // next turn. Use this for very long workflows (deep-research, etc.) where
+        // blocking the agent's turn for the full duration is undesirable.
+        if (input.async === true) {
+          return {
+            title: "workflow started",
+            output: `Workflow started in background. run_id: ${runID}\nThe result will be delivered as a notification when complete.`,
+            metadata: { runID, status: "running" } satisfies Metadata,
+          }
+        }
+
+        // Default sync path: block until terminal so the model + user see phase
+        // and log() events as the tool's own message stream (skill-like) instead
+        // of a bare run_id followed by silence until the next turn drains the
+        // inbox. We read the transcript from the runtime's authoritative per-run
+        // buffer (populated synchronously by the guest hooks) rather than
+        // subscribing to the bus: that avoids the subscribe-after-start head race,
+        // cross-event reordering, the post-wait tail race, and any subscription
+        // leak on interrupt. The buffer flushes to part-state metadata as it grows
+        // — the TUI re-renders each delta via the existing message.part.delta path.
+        yield* ctx.metadata({
+          metadata: { runID, status: "running", transcript: [] } satisfies Metadata,
+        })
+
+        // A 250ms flush loop reads the runtime's transcript + live counters and
+        // pushes a CAPPED snapshot through ctx.metadata (reusing the per-part-state
+        // delta channel, so TUI consumers need no new subscription). The cap keeps
+        // each delta bounded regardless of event count. forkScoped binds the fiber to
+        // the execute scope below, so it is interrupted on completion OR interrupt.
+        // Counters are flushed alongside the transcript so the inline panel shows live
+        // ✓/✗/⟳ progress (they can change without a new transcript line — an agent can
+        // settle without a log() — so we flush on EITHER changing).
+        let lastLen = 0
+        let lastCounters = ""
+        const flushFiber = yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            while (true) {
+              yield* Effect.sleep("250 millis")
+              const t = yield* runtime.transcript({ runID })
+              const s = yield* runtime.status({ runID })
+              const counters = { running: s.running, succeeded: s.succeeded, failed: s.failed }
+              const countersKey = `${counters.running}/${counters.succeeded}/${counters.failed}`
+              if (t.length === lastLen && countersKey === lastCounters) continue
+              lastLen = t.length
+              lastCounters = countersKey
+              yield* ctx.metadata({
+                metadata: {
+                  runID,
+                  status: "running",
+                  transcript: capTranscript(t),
+                  counters,
+                  ...(s.currentPhase !== undefined ? { currentPhase: s.currentPhase } : {}),
+                } satisfies Metadata,
+              })
+            }
+          }),
+        )
+
+        const outcome = yield* runtime.wait({ runID })
+        yield* Fiber.interrupt(flushFiber)
+
+        // Final counters/phase for the terminal metadata so the inline panel keeps
+        // showing the true ✓/✗/⟳ after the run ends (not the last mid-flush value).
+        const finalStatus = yield* runtime.status({ runID })
+        const finalCounters = {
+          running: finalStatus.running,
+          succeeded: finalStatus.succeeded,
+          failed: finalStatus.failed,
+        }
+        const finalPhase = finalStatus.currentPhase
+
+        // The guest hooks append synchronously and complete before the script
+        // returns (which resolves wait()), so this snapshot is the full, ordered
+        // transcript. Cap it for both the model-facing output and persisted metadata.
+        const finalTranscript = capTranscript(yield* runtime.transcript({ runID }))
+        const lines = finalTranscript.map((e) => (e.kind === "phase" ? `▸ ${e.text}` : `  ${e.text}`))
+        if (outcome.status === "completed") {
+          const result = JSON.stringify(outcome.result ?? null)
+          const truncated = result.length > 4000 ? result.slice(0, 4000) + " …(truncated)" : result
+          return {
+            title: `workflow ${label} completed`,
+            output:
+              (lines.length ? lines.join("\n") + "\n\n" : "") +
+              `Result: ${truncated}\nrun_id: ${runID}`,
+            metadata: {
+              runID,
+              status: "completed",
+              transcript: finalTranscript,
+              counters: finalCounters,
+              ...(finalPhase !== undefined ? { currentPhase: finalPhase } : {}),
+            } satisfies Metadata,
+          }
+        }
+        if (outcome.status === "failed") {
+          return {
+            title: `workflow ${label} failed`,
+            output:
+              (lines.length ? lines.join("\n") + "\n\n" : "") +
+              `Error: ${outcome.error}\nrun_id: ${runID}`,
+            metadata: {
+              runID,
+              status: "failed",
+              transcript: finalTranscript,
+              counters: finalCounters,
+              ...(finalPhase !== undefined ? { currentPhase: finalPhase } : {}),
+            } satisfies Metadata,
+          }
+        }
         return {
-          title: "workflow started",
-          output: `Workflow started. run_id: ${started.runID}\nThe result will be delivered as a notification when complete.`,
-          metadata: { runID: started.runID } satisfies Metadata,
+          title: `workflow ${label} cancelled`,
+          output:
+            (lines.length ? lines.join("\n") + "\n\n" : "") + `Cancelled.\nrun_id: ${runID}`,
+          metadata: {
+            runID,
+            status: "cancelled",
+            transcript: finalTranscript,
+            counters: finalCounters,
+            ...(finalPhase !== undefined ? { currentPhase: finalPhase } : {}),
+          } satisfies Metadata,
         }
       }
       if (input.operation === "status") {
@@ -158,7 +410,8 @@ export const WorkflowTool = Tool.define<typeof parameters, Metadata, Config.Serv
     return {
       description: DESCRIPTION,
       parameters,
-      execute: (input: z.infer<typeof parameters>, ctx: Tool.Context<Metadata>) => run(input, ctx).pipe(Effect.orDie),
+      execute: (input: z.infer<typeof parameters>, ctx: Tool.Context<Metadata>) =>
+        run(input, ctx).pipe(Effect.scoped, Effect.orDie),
     } satisfies Tool.DefWithoutID<typeof parameters, Metadata>
   }),
 )

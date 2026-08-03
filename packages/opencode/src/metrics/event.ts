@@ -24,7 +24,7 @@ export const ToolCall = BusEvent.define(
     input_bytes: z.number(),
     output_bytes: z.number(),
     tool_call_id: z.string(),
-    tool_call_status: z.enum(["success", "error"]),
+    tool_call_status: z.enum(["success", "error", "cancelled"]),
   }),
 )
 
@@ -39,5 +39,18 @@ export const AgentRequest = BusEvent.define(
     total_tokens_out: z.number(),
     files_changed: z.number(),
     validation_status: z.string(),
+  }),
+)
+
+export const TryBestDetected = BusEvent.define(
+  "metrics.try_best_detected",
+  z.object({
+    sessionID: z.string(),
+    reason: z.enum(["edit_repeat", "bash_retry", "action_streak"]),
+    provider: z.string(),
+    model_id: z.string(),
+    count: z.number().int().positive(),
+    similarity: z.number().optional(),
+    action: z.enum(["edit", "verify"]).optional(),
   }),
 )

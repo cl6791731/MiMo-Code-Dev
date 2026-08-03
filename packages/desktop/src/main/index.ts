@@ -1,4 +1,3 @@
-import "./bun-polyfill"
 import { randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { existsSync } from "node:fs"
@@ -8,6 +7,8 @@ import { join } from "node:path"
 import type { Event } from "electron"
 import { app, BrowserWindow, dialog } from "electron"
 import pkg from "electron-updater"
+
+import "./bun-polyfill"
 
 import contextMenu from "electron-context-menu"
 contextMenu({ showSaveImageAs: true, showLookUpSelection: false, showSearchWithGoogle: false })
@@ -42,7 +43,7 @@ import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendSqliteMigratio
 import { initLogging } from "./logging"
 import { parseMarkdown } from "./markdown"
 import { createMenu } from "./menu"
-import { getDefaultServerUrl, getWslConfig, setDefaultServerUrl, setWslConfig, spawnLocalServer } from "./server"
+import { getDefaultServerUrl, getWslConfig, serverModule, setDefaultServerUrl, setWslConfig, spawnLocalServer } from "./server"
 import {
   createLoadingWindow,
   createMainWindow,
@@ -159,7 +160,7 @@ async function initialize() {
     })
 
     if (needsMigration) {
-      const { Database, JsonMigration } = await import("virtual:opencode-server")
+      const { Database, JsonMigration } = await serverModule()
       await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
         progress: (event: { current: number; total: number }) => {
           const percent = Math.round(event.current / event.total) * 100

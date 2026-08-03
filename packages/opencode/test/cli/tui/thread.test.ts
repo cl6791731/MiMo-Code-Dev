@@ -37,6 +37,7 @@ function setup() {
     hostname: "127.0.0.1",
     mdnsDomain: "opencode.local",
     cors: [],
+    noAuth: false,
   })
   spyOn(Win32, "win32DisableProcessedInput").mockImplementation(() => {})
   spyOn(Win32, "win32InstallCtrlCGuard").mockReturnValue(undefined)
@@ -59,14 +60,19 @@ describe("tui thread", () => {
       session: undefined,
       continue: false,
       fork: false,
-      "never-ask-questions": false,
-      neverAskQuestions: false,
+      "never-ask": false,
+      neverAsk: false,
+      trust: true,
+      "dangerously-skip-permissions": false,
+      dangerouslySkipPermissions: false,
       port: 0,
       hostname: "127.0.0.1",
       mdns: false,
       "mdns-domain": "opencode.local",
       mdnsDomain: "opencode.local",
       cors: [],
+      "no-auth": false,
+      noAuth: false,
     }
     return TuiThreadCommand.handler(args)
   }

@@ -3,7 +3,7 @@ import { Project } from "../../src/project"
 import { Log } from "../../src/util"
 import { $ } from "bun"
 import path from "path"
-import { tmpdir } from "../fixture/fixture"
+import { tmpdir, withTmpdirOutsideGit } from "../fixture/fixture"
 import { GlobalBus } from "../../src/bus/global"
 import { ProjectID } from "../../src/project/schema"
 import { Effect, Layer, Stream } from "effect"
@@ -103,10 +103,33 @@ describe("Project.fromDirectory", () => {
     expect(await Bun.file(idFile).exists()).toBe(true)
   })
 
-  test("returns global for non-git directory", async () => {
+  test("returns global for non-git directory", () =>
+    withTmpdirOutsideGit(async () => {
+      await using tmp = await tmpdir()
+      const { project } = await run((svc) => svc.fromDirectory(tmp.path))
+      expect(project.id).toBe(ProjectID.global)
+    }),
+  )
+
+  test("disables vcs when .git is anchored at $HOME", async () => {
     await using tmp = await tmpdir()
-    const { project } = await run((svc) => svc.fromDirectory(tmp.path))
-    expect(project.id).toBe(ProjectID.global)
+    await $`git init`.cwd(tmp.path).quiet()
+
+    const prevHome = process.env.HOME
+    const prevUserProfile = process.env.USERPROFILE
+    process.env.HOME = tmp.path
+    process.env.USERPROFILE = tmp.path
+    try {
+      const { project } = await run((svc) => svc.fromDirectory(tmp.path))
+      expect(project.vcs).toBeUndefined()
+      expect(project.id).toBe(ProjectID.global)
+      expect(project.worktree).toBe(tmp.path)
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME
+      else process.env.HOME = prevHome
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevUserProfile
+    }
   })
 
   test("derives stable project ID from cached UUID", async () => {

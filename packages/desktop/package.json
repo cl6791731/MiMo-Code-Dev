@@ -1,13 +1,13 @@
 {
   "name": "@mimo-ai/desktop",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.9",
   "type": "module",
   "license": "MIT",
-  "homepage": "https://mimocode.ai",
+  "homepage": "https://opencode.ai",
   "author": {
-    "name": "MiMoCode",
-    "email": "hello@mimocode.ai"
+    "name": "OpenCode",
+    "email": "hello@opencode.ai"
   },
   "scripts": {
     "typecheck": "tsgo -b",
@@ -24,18 +24,16 @@
   },
   "main": "./out/main/index.js",
   "dependencies": {
-    "drizzle-orm": "catalog:",
     "effect": "catalog:",
     "electron-context-menu": "4.1.2",
     "electron-log": "^5",
     "electron-store": "^10",
     "electron-updater": "^6",
     "electron-window-state": "^5.0.3",
-    "marked": "^15",
-    "sharp": "0.35.2"
+    "drizzle-orm": "catalog:",
+    "marked": "^15"
   },
   "devDependencies": {
-    "@actions/artifact": "4.0.0",
     "@lydell/node-pty": "catalog:",
     "@mimo-ai/app": "workspace:*",
     "@mimo-ai/ui": "workspace:*",
@@ -50,6 +48,7 @@
     "electron": "41.2.1",
     "electron-builder": "^26",
     "electron-vite": "^5",
+    "sharp": "0.33.5",
     "solid-js": "catalog:",
     "sury": "11.0.0-alpha.4",
     "typescript": "~5.6.2",

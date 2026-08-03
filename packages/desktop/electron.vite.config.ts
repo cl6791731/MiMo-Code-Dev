@@ -8,7 +8,7 @@ const channel = (() => {
   return "dev"
 })()
 
-const MIMOCODE_SERVER_DIST = "../opencode/dist/node"
+const OPENCODE_SERVER_DIST = "../opencode/dist/node"
 
 const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
 
@@ -25,26 +25,40 @@ export default defineConfig({
     },
     plugins: [
       {
-        name: "mimocode:node-pty-narrower",
+        name: "opencode:node-pty-narrower",
         enforce: "pre",
         resolveId(s) {
           if (s === "@lydell/node-pty") return nodePtyPkg
         },
       },
       {
-        name: "mimocode:virtual-server-module",
+        name: "opencode:virtual-server-module",
         enforce: "pre",
         resolveId(id) {
-          if (id === "virtual:opencode-server") return this.resolve(`${MIMOCODE_SERVER_DIST}/node.js`)
+          // Externalize the bundled opencode server: rollup chokes on the
+          // 22MB single-file bundle (unterminated string in generated chunk),
+          // so we copy it as a runtime asset and load it dynamically instead.
+          if (id === "virtual:opencode-server") {
+            return {
+              id: "opencode-server-runtime",
+              external: true,
+            }
+          }
         },
       },
       {
-        name: "mimocode:copy-server-assets",
+        name: "opencode:copy-server-assets",
         async writeBundle() {
-          for (const l of await fs.readdir(MIMOCODE_SERVER_DIST)) {
+          await fs.mkdir("./out/main/chunks", { recursive: true })
+          for (const l of await fs.readdir(OPENCODE_SERVER_DIST)) {
             if (!l.endsWith(".wasm")) continue
-            await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${MIMOCODE_SERVER_DIST}/${l}`))
+            await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${OPENCODE_SERVER_DIST}/${l}`))
           }
+          // Copy the bundled server to a runtime-loadable location
+          await fs.writeFile(
+            "./out/main/chunks/opencode-server.js",
+            await fs.readFile(`${OPENCODE_SERVER_DIST}/node.js`),
+          )
         },
       },
     ],

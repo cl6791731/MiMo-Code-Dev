@@ -1,6 +1,5 @@
 ---
 name: compose:review
-hidden: true
 description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements
 ---
 
@@ -58,7 +57,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 [Dispatch code reviewer subagent]
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
-  PLAN_OR_REQUIREMENTS: Task 2 from docs/compose/plans/deployment-plan.md
+  PLAN_OR_REQUIREMENTS: Task 2 from plans/deployment-plan.md
   BASE_SHA: a7981ec
   HEAD_SHA: 3df7661
 

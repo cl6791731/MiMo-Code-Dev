@@ -10,6 +10,7 @@ import { Flag } from "@/flag/flag"
 import { basicAuth } from "hono/basic-auth"
 import { cors } from "hono/cors"
 import { compress } from "hono/compress"
+import { isPtyConnectPath, PTY_CONNECT_TICKET_QUERY } from "./pty-ticket"
 
 const log = Log.create({ service: "server" })
 
@@ -30,21 +31,22 @@ export const ErrorMiddleware: ErrorHandler = (err, c) => {
     return c.json(new NamedError.Unknown({ message: err.message }).toObject(), { status: 409 })
   }
   if (err instanceof HTTPException) return err.getResponse()
-  const message = err instanceof Error && err.stack ? err.stack : err.toString()
+  const message = err instanceof Error ? err.message : "Internal Server Error"
   return c.json(new NamedError.Unknown({ message }).toObject(), {
     status: 500,
   })
 }
 
 export const AuthMiddleware: MiddlewareHandler = (c, next) => {
-  // Allow CORS preflight requests to succeed without auth.
-  // Browser clients sending Authorization headers will preflight with OPTIONS.
   if (c.req.method === "OPTIONS") return next()
   const password = Flag.MIMOCODE_SERVER_PASSWORD
   if (!password) return next()
-  const username = Flag.MIMOCODE_SERVER_USERNAME ?? "mimocode"
 
-  if (c.req.query("auth_token")) c.req.raw.headers.set("authorization", `Basic ${c.req.query("auth_token")}`)
+  // PTY websocket connect with a ticket skips basic auth; the handler validates the ticket.
+  const path = new URL(c.req.url).pathname
+  if (isPtyConnectPath(path) && c.req.query(PTY_CONNECT_TICKET_QUERY)) return next()
+
+  const username = Flag.MIMOCODE_SERVER_USERNAME ?? "mimocode"
 
   return basicAuth({ username, password })(c, next)
 }

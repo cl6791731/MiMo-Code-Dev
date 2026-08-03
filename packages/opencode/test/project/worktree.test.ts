@@ -6,7 +6,7 @@ import { Cause, Effect, Exit, Layer } from "effect"
 import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
 import { Instance } from "../../src/project/instance"
 import { Worktree } from "../../src/worktree"
-import { provideInstance, provideTmpdirInstance } from "../fixture/fixture"
+import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(Worktree.defaultLayer, CrossSpawnSpawner.defaultLayer))
@@ -25,11 +25,17 @@ async function waitReady() {
       reject(new Error("timed out waiting for worktree.ready"))
     }, 10_000)
 
-    function on(evt: { directory?: string; payload: { type: string; properties: { name: string; branch: string } } }) {
+    function on(evt: { directory?: string; payload: { type: string; properties: { name?: string; branch?: string; message?: string } } }) {
+      if (evt.payload.type === Worktree.Event.Failed.type) {
+        clearTimeout(timer)
+        GlobalBus.off("event", on)
+        reject(new Error(evt.payload.properties.message ?? "worktree bootstrap failed"))
+        return
+      }
       if (evt.payload.type !== Worktree.Event.Ready.type) return
       clearTimeout(timer)
       GlobalBus.off("event", on)
-      resolve(evt.payload.properties)
+      resolve({ name: evt.payload.properties.name!, branch: evt.payload.properties.branch! })
     }
 
     GlobalBus.on("event", on)
@@ -52,7 +58,7 @@ describe("Worktree", () => {
             expect(info.branch).toBe(`mimocode/${info.name}`)
             expect(info.directory).toContain(info.name)
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
@@ -66,7 +72,7 @@ describe("Worktree", () => {
             expect(info.name).toBe("my-feature")
             expect(info.branch).toBe("mimocode/my-feature")
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
@@ -79,19 +85,21 @@ describe("Worktree", () => {
 
             expect(info.name).toBe("my-feature-branch")
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
     it.live("throws NotGitError for non-git directories", () =>
-      provideTmpdirInstance(() =>
-        Effect.gen(function* () {
-          const svc = yield* Worktree.Service
-          const exit = yield* Effect.exit(svc.makeWorktreeInfo())
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const exit = yield* Effect.exit(svc.makeWorktreeInfo())
 
-          expect(Exit.isFailure(exit)).toBe(true)
-          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Worktree.NotGitError)
-        }),
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Worktree.NotGitError)
+          }),
+        { outsideGit: true },
       ),
     )
   })
@@ -102,18 +110,30 @@ describe("Worktree", () => {
         () =>
           Effect.gen(function* () {
             const svc = yield* Worktree.Service
-            const info = yield* svc.create()
+            const info = yield* svc.makeWorktreeInfo()
+            yield* svc.createFromInfo(info)
 
             expect(info.name).toBeDefined()
             expect(info.branch).toStartWith("mimocode/")
             expect(info.directory).toBeDefined()
 
-            yield* Effect.promise(() => Bun.sleep(1000))
-
             const ok = yield* svc.remove({ directory: info.directory })
             expect(ok).toBe(true)
+            let initialized = 0
+            yield* Effect.promise(() =>
+              Instance.provide({
+                directory: info.directory,
+                init: () => {
+                  initialized++
+                  return Promise.resolve()
+                },
+                fn: () => undefined,
+              }),
+            )
+            expect(initialized).toBe(1)
+            yield* Effect.promise(() => Instance.disposeDirectory(info.directory))
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
@@ -136,11 +156,9 @@ describe("Worktree", () => {
             expect(props.name).toBe(info.name)
             expect(props.branch).toBe(info.branch)
 
-            yield* Effect.promise(() => Instance.dispose()).pipe(provideInstance(info.directory))
-            yield* Effect.promise(() => Bun.sleep(100))
             yield* svc.remove({ directory: info.directory })
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
@@ -156,11 +174,9 @@ describe("Worktree", () => {
             expect(info.branch).toBe("mimocode/test-workspace")
 
             yield* Effect.promise(() => ready)
-            yield* Effect.promise(() => Instance.dispose()).pipe(provideInstance(info.directory))
-            yield* Effect.promise(() => Bun.sleep(100))
             yield* svc.remove({ directory: info.directory })
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
   })
@@ -181,7 +197,98 @@ describe("Worktree", () => {
 
             yield* svc.remove({ directory: info.directory })
           }),
-        { git: true },
+        { git: true, outsideGit: true },
+      ),
+    )
+  })
+
+  describe("branch ref advances after commit", () => {
+    it.live("child commit in worktree advances the branch ref as seen from the outer repo", () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const info = yield* svc.makeWorktreeInfo("ref-advance")
+            yield* svc.createFromInfo(info)
+
+            // HEAD in the worktree must be attached to the branch, not detached.
+            const symbolic = yield* Effect.promise(() =>
+              $`git symbolic-ref --quiet HEAD`.cwd(info.directory).quiet().text(),
+            )
+            expect(symbolic.trim()).toBe(`refs/heads/${info.branch}`)
+
+            // Commit inside the worktree.
+            yield* Effect.promise(() => Bun.write(path.join(info.directory, "change.txt"), "hello"))
+            yield* Effect.promise(() => $`git add change.txt`.cwd(info.directory).quiet())
+            yield* Effect.promise(() => $`git commit -m "child change"`.cwd(info.directory).quiet())
+
+            const worktreeHead = (
+              yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(info.directory).quiet().text())
+            ).trim()
+
+            // The branch ref, read from the OUTER repo, must point at the new commit.
+            const outerRef = (
+              yield* Effect.promise(() => $`git rev-parse ${info.branch}`.cwd(dir).quiet().text())
+            ).trim()
+
+            expect(outerRef).toBe(worktreeHead)
+
+            yield* Effect.promise(() => Instance.disposeDirectory(info.directory))
+            yield* Effect.promise(() => Bun.sleep(100))
+            yield* svc.remove({ directory: info.directory })
+          }),
+        { git: true, outsideGit: true },
+      ),
+    )
+
+    it.live("concurrent worktree creates + commits do not lose a branch ref advance", () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+
+            const infos = yield* Effect.forEach([0, 1, 2], (i) => svc.makeWorktreeInfo(`concurrent-${i}`), {
+              concurrency: 1,
+            })
+
+            // Create all worktrees concurrently — they share one ref store.
+            yield* Effect.forEach(infos, (info) => svc.createFromInfo(info), { concurrency: "unbounded" })
+
+            // Commit into each worktree concurrently.
+            const heads = yield* Effect.forEach(
+              infos,
+              (info) =>
+                Effect.gen(function* () {
+                  yield* Effect.promise(() =>
+                    Bun.write(path.join(info.directory, "change.txt"), `hello ${info.name}`),
+                  )
+                  yield* Effect.promise(() => $`git add change.txt`.cwd(info.directory).quiet())
+                  yield* Effect.promise(() => $`git commit -m "commit ${info.name}"`.cwd(info.directory).quiet())
+                  const head = (
+                    yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(info.directory).quiet().text())
+                  ).trim()
+                  return { info, head }
+                }),
+              { concurrency: "unbounded" },
+            )
+
+            // Every branch ref, read from the outer repo, must point at its commit.
+            for (const { info, head } of heads) {
+              const outerRef = (
+                yield* Effect.promise(() => $`git rev-parse ${info.branch}`.cwd(dir).quiet().text())
+              ).trim()
+              expect(outerRef).toBe(head)
+            }
+
+            for (const { info } of heads) {
+              yield* Effect.promise(() => Instance.disposeDirectory(info.directory))
+            }
+            yield* Effect.promise(() => Bun.sleep(100))
+            for (const { info } of heads) {
+              yield* svc.remove({ directory: info.directory }).pipe(Effect.ignore)
+            }
+          }),
+        { git: true, outsideGit: true },
       ),
     )
   })
@@ -192,10 +299,35 @@ describe("Worktree", () => {
         (dir) =>
           Effect.gen(function* () {
             const svc = yield* Worktree.Service
-            const ok = yield* svc.remove({ directory: path.join(dir, "does-not-exist") })
+            const target = path.join(dir, "does-not-exist")
+            let initialized = 0
+            yield* Effect.promise(() =>
+              Instance.provide({
+                directory: target,
+                init: () => {
+                  initialized++
+                  return Promise.resolve()
+                },
+                fn: () => undefined,
+              }),
+            )
+
+            const ok = yield* svc.remove({ directory: target })
             expect(ok).toBe(true)
+            yield* Effect.promise(() =>
+              Instance.provide({
+                directory: target,
+                init: () => {
+                  initialized++
+                  return Promise.resolve()
+                },
+                fn: () => undefined,
+              }),
+            )
+            expect(initialized).toBe(2)
+            yield* Effect.promise(() => Instance.disposeDirectory(target))
           }),
-        { git: true },
+        { git: true, outsideGit: true },
       ),
     )
 
@@ -208,6 +340,7 @@ describe("Worktree", () => {
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Worktree.NotGitError)
         }),
+        { outsideGit: true },
       ),
     )
   })

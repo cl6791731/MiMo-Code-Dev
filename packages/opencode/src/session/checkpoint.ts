@@ -15,6 +15,7 @@ import { Instance } from "@/project/instance"
 import { ProjectID } from "@/project/schema"
 import { SessionTable } from "./session.sql"
 import * as Session from "./session"
+import { SessionStatus } from "./status"
 import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
 import { Log, Token } from "../util"
@@ -45,6 +46,39 @@ const log = Log.create({ service: "session.checkpoint" })
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 60) + "\n... (truncated, full body at file)"
+}
+
+/**
+ * Truncate verbatim user input that exceeds per-message cap. Keeps head (~60%)
+ * + tail (~30%) with an elision marker pointing at messageID for full recall
+ * via the history tool's operation=around. ~4 chars/token approximation matches
+ * Token.estimate.
+ */
+function truncateVerbatimUserMsg(text: string, capTokens: number, messageID: string): string {
+  if (Token.estimate(text) <= capTokens) return text
+  // slice() cuts on UTF-16 code units, which can split a surrogate pair at the
+  // boundary; trim a dangling high surrogate off the head and a leading low
+  // surrogate off the tail so emoji / non-BMP chars don't render as garbage.
+  const head = text.slice(0, Math.floor(capTokens * 0.6) * 4).replace(/[\uD800-\uDBFF]$/, "")
+  const tail = text.slice(-Math.floor(capTokens * 0.3) * 4).replace(/^[\uDC00-\uDFFF]/, "")
+  const elidedTokens = Token.estimate(text) - Token.estimate(head) - Token.estimate(tail)
+  return [
+    head,
+    `[…elided ${elidedTokens} tokens; messageID=${messageID}; use the history tool with operation=around to fetch full content]`,
+    tail,
+  ].join("\n")
+}
+
+/**
+ * Concatenate text-typed parts of a user message into a single string. Skips
+ * tool/file/image/etc. parts and synthetic text (e.g. rebuild-boundary content
+ * injected by insertRebuildBoundary) — only true user prose contributes.
+ */
+function userMsgText(parts: Array<{ type: string; text?: string; synthetic?: boolean }>): string {
+  return parts
+    .filter((p) => p.type === "text" && !p.synthetic && typeof p.text === "string" && p.text.length > 0)
+    .map((p) => p.text!)
+    .join("\n")
 }
 
 function autonomousLoopReminder(): string {
@@ -117,6 +151,23 @@ const TAIL_MIN_TOKENS = 10_000
 const TAIL_MAX_TOKENS = 20_000
 const TAIL_MIN_TEXT_BLOCK_MESSAGES = 5
 
+// How long a context rebuild waits for an in-flight checkpoint writer to finish
+// before proceeding with whatever is currently on disk (the writer keeps
+// running in the background). Bounded so a slow writer can't make the main
+// agent appear hung — the failure mode that led to manual aborts + worker
+// teardown that killed the writer. Paired with a visible "Preparing
+// conversation context…" busy status during the wait.
+const REBUILD_WAIT_MS = "30 seconds"
+
+// Safety bound for awaiting the FIRST checkpoint writer when no usable
+// checkpoint exists yet (no watermark). Unlike REBUILD_WAIT_MS this is not a
+// "prefer-fresh" nicety — there is nothing else to rebuild from, so we wait for
+// the writer proper. The bound only guards the pathological case where the
+// writer's Deferred never resolves (e.g. its process died); on timeout we
+// defer to compaction. A normal writer settles well inside this.
+const FIRST_CHECKPOINT_WAIT_MS = "5 minutes"
+
+
 // Rebuild-time microcompact (see
 // docs/superpowers/specs/2026-06-03-rebuild-tail-microcompact-design.md).
 //
@@ -124,11 +175,12 @@ const TAIL_MIN_TEXT_BLOCK_MESSAGES = 5
 // survive into the rebuild context. Their tool_use parts are kept (so the
 // LLM still sees what action was taken), but for tools in this whitelist
 // the tool_result content is replaced with a placeholder. Result is either
-// large-and-regeneratable (read/bash/grep/glob/webfetch/websearch) or
+// large-and-regeneratable (read/view_image/bash/grep/glob/webfetch/websearch) or
 // essentially a "done" confirmation (edit/write/multiedit). Tools NOT here
 // carry state the LLM references later (actor/task/question/skill/memory).
 const COMPACTABLE_TOOL_NAMES = new Set<string>([
   "read",
+  "view_image",
   "bash",
   "grep",
   "glob",
@@ -847,20 +899,35 @@ export const layer: Layer.Layer<
 
       writers.set(input.sessionID, { writing: result.outcome })
 
-      // Bookkeeping: the parent's last_checkpoint_message_id advances when the
-      // writer settles. Fork into the layer's scope so the watcher survives
-      // tryStartCheckpointWriter returning (background: true semantics) but is still tied
-      // to the layer's lifetime — no orphan fiber on shutdown.
+      // Bookkeeping: the parent's last_checkpoint_message_id (the delta
+      // watermark — the point future rebuilds compute the message tail from)
+      // advances ONLY when the writer SUCCEEDS. This is a transactional
+      // invariant: the on-disk checkpoint content and the watermark move
+      // together, or neither moves. If the writer failed/was cancelled (e.g.
+      // `Aborted process` from worker teardown), advancing the watermark would
+      // "consume" messages the failed checkpoint never actually captured —
+      // silently dropping that span of context from every subsequent rebuild.
+      // Leaving the watermark put means the next writer re-covers the same
+      // delta, so nothing is lost. Fork into the layer's scope so the watcher
+      // survives tryStartCheckpointWriter returning (background: true) but stays
+      // tied to the layer's lifetime — no orphan fiber on shutdown.
       yield* Effect.gen(function* () {
         const outcome = yield* Deferred.await(result.outcome)
-        yield* Effect.sync(() =>
-          Database.use((d) =>
-            d.update(SessionTable)
-              .set({ last_checkpoint_message_id: endMessageID as MessageID })
-              .where(eq(SessionTable.id, input.sessionID))
-              .run(),
-          ),
-        )
+        if (outcome.status === "success") {
+          yield* Effect.sync(() =>
+            Database.use((d) =>
+              d.update(SessionTable)
+                .set({ last_checkpoint_message_id: endMessageID as MessageID })
+                .where(eq(SessionTable.id, input.sessionID))
+                .run(),
+            ),
+          )
+        } else {
+          log.warn("checkpoint writer did not succeed — leaving watermark unchanged so the delta is re-covered", {
+            sessionID: input.sessionID,
+            status: outcome.status,
+          })
+        }
 
         // F40: capture pending before deleting the slot so a queued writer
         // (held while writer1 was running) can fire as a fresh writer.
@@ -1020,16 +1087,53 @@ export const layer: Layer.Layer<
       // would skip rebuild → fall through to F39 compaction → context loss.
       if (opts?.agentID && opts.agentID !== "main") return ""
 
+      // Decide whether a usable checkpoint exists using the WATERMARK
+      // (last_checkpoint_message_id), not the on-disk file's text. The writer's
+      // final step advances the watermark, and — per the transactional fix — it
+      // advances ONLY on success. So the watermark is the authoritative "there
+      // is a usable checkpoint" signal, and it's immune to the bootstrap
+      // template (which exists on disk before any writer succeeds).
+      //
+      //   - watermark set  → a prior writer succeeded → a usable checkpoint
+      //                       exists. If a writer is in-flight, await it
+      //                       (bounded) to prefer the fresher version, then
+      //                       rebuild; on timeout use the existing one.
+      //   - watermark unset → no usable checkpoint ever produced (first
+      //                       checkpoint). If a writer is in-flight, AWAIT it
+      //                       (bounded by a large safety timeout so a writer
+      //                       whose Deferred never resolves can't hang forever)
+      //                       rather than rebuilding off the bootstrap template
+      //                       mid-write. Then fall through to normal rendering:
+      //                       if the writer succeeded, the fresh checkpoint is
+      //                       now on disk; if it failed, rendering falls back to
+      //                       whatever else exists (ledger / notes / memory) and,
+      //                       when there is genuinely nothing, returns "" so the
+      //                       caller compacts. We do NOT force "" on failure here
+      //                       — that would suppress valid non-checkpoint context.
       const inFlight = writers.get(sessionID)
       if (inFlight) {
-        log.info("rebuild waiting for in-flight writer", { sessionID })
-        yield* Effect.race(
-          Deferred.await(inFlight.writing).pipe(Effect.as("done" as const)),
-          Effect.sleep("60 seconds").pipe(
-            Effect.tap(() => Effect.sync(() => log.warn("writer wait timeout — using on-disk checkpoint", { sessionID }))),
-            Effect.as("timeout" as const),
-          ),
-        ).pipe(Effect.catch(() => Effect.succeed("error" as const)))
+        const watermarkBefore = yield* lastBoundary(sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        // Visible busy status so the wait shows progress, never a silent hang
+        // (the historical trigger for a manual abort → worker teardown wedge).
+        yield* bus
+          .publish(SessionStatus.Event.Status, {
+            sessionID,
+            status: { type: "busy", message: "Preparing conversation context…" },
+          })
+          .pipe(Effect.ignore)
+
+        // Prefer the fresher checkpoint: wait for the in-flight writer. When a
+        // usable checkpoint already exists (watermark set) the wait is short
+        // (REBUILD_WAIT_MS) — we can proceed with the existing one on timeout.
+        // When none exists yet (first checkpoint) we wait longer
+        // (FIRST_CHECKPOINT_WAIT_MS) since there's nothing else to rebuild from,
+        // bounded only to survive a writer whose Deferred never resolves.
+        const bound = watermarkBefore ? REBUILD_WAIT_MS : FIRST_CHECKPOINT_WAIT_MS
+        const waited = yield* Effect.race(
+          Deferred.await(inFlight.writing).pipe(Effect.as("settled" as const)),
+          Effect.sleep(bound).pipe(Effect.as("timeout" as const)),
+        ).pipe(Effect.catch(() => Effect.succeed("settled" as const)))
+        log.info("rebuild proceeding after writer wait", { sessionID, waited, hadCheckpoint: !!watermarkBefore })
       }
 
       const cfg = yield* config.get()
@@ -1073,13 +1177,52 @@ export const layer: Layer.Layer<
 
       const actors = yield* actorRegistry.listActive()
 
-      // Bail early if absolutely nothing to push: no tasks, no memory content, no live actors.
+      // Pull recent user messages (verbatim, FIFO-bounded). Done before the
+      // early-bail check so a session whose only signal is "user typed N
+      // prompts" still emits the section.
+      const recentUserCap = caps.recent_user ?? 16_000
+      const recentUserPerMsg = caps.recent_user_per_msg ?? 2_000
+      const recentUserEntries: string[] = []
+      if (recentUserCap > 0) {
+        // Fixed page ceiling sized comfortably above the token budget: at the
+        // 2K per-msg cap, 200 msgs ≈ 400K tokens, far past any recent_user cap,
+        // so the token loop below — not this limit — is what bounds the section.
+        // The only way 200 msgs could underflow the budget is hundreds of sub-
+        // 80-token prompts ("ok"/"continue"), which carry no anchors worth
+        // paging deeper for. Keeping a constant avoids a magic tokens/msg
+        // heuristic and a larger fetch+hydrate on every checkpoint.
+        // Exclude rebuild/compaction boundary messages: insertRebuildBoundary
+        // writes a role:"user" row carrying a checkpoint part + synthetic text
+        // holding the *previous* rebuild context. Re-ingesting it would fold
+        // each prior rebuild back in recursively (fractal bloat). userMsgText
+        // also drops synthetic text parts as a second guard.
+        const userMsgs = MessageV2.page({ sessionID, agentID: "main", limit: 200 }).items.filter(
+          (m) =>
+            m.info.role === "user" &&
+            !m.parts.some((p) => p.type === "tool" || p.type === "checkpoint" || p.type === "compaction"),
+        )
+        // Iterate most-recent backward so FIFO drops oldest when total cap hits.
+        let remaining = recentUserCap
+        for (let i = userMsgs.length - 1; i >= 0; i--) {
+          const rawText = userMsgText(userMsgs[i].parts)
+          if (!rawText.trim()) continue
+          const entry = truncateVerbatimUserMsg(rawText, recentUserPerMsg, userMsgs[i].info.id)
+          const cost = Token.estimate(entry)
+          if (remaining - cost < 0) break
+          recentUserEntries.unshift(entry)
+          remaining -= cost
+        }
+      }
+
+      // Bail early if absolutely nothing to push: no tasks, no memory content, no live actors,
+      // no user messages.
       if (
         tasks.length === 0 &&
         !checkpointText.trim() &&
         !memoryText.trim() &&
         !globalText.trim() &&
-        actors.length === 0
+        actors.length === 0 &&
+        recentUserEntries.length === 0
       ) {
         return ""
       }
@@ -1140,6 +1283,16 @@ export const layer: Layer.Layer<
           lines.push(line)
           actorBudget -= cost
         }
+        lines.push("")
+      }
+
+      // Section 6.5: recent user input (verbatim, FIFO, budget-bounded).
+      // Preserves original user prose from the live DB — writer summaries
+      // paraphrase user commands, losing anchors like exact flags or pasted
+      // content. (entries computed earlier so the early-bail guard sees them.)
+      if (recentUserEntries.length > 0) {
+        lines.push("## Recent user input (verbatim)")
+        lines.push(...recentUserEntries)
         lines.push("")
       }
 

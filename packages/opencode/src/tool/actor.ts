@@ -1,4 +1,5 @@
 import * as Tool from "./tool"
+import { RecoverableError } from "./recoverable"
 import DESCRIPTION from "./actor.txt"
 import SHELL_DESCRIPTION from "./actor.shell.txt"
 import { tokenize } from "./shell-tokenize"
@@ -8,6 +9,7 @@ import { SessionID, MessageID, PartID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider"
+import { sortVisionModels } from "../provider/provider"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "../config"
 import { ActorRegistry } from "@/actor/registry"
@@ -28,9 +30,9 @@ export interface ActorPromptOps {
 const id = "actor"
 
 const MODEL_PARAM_DESCRIPTION =
-  "(optional) Model for this subagent: a model group name (e.g. ultra/standard/lite) or a literal provider/model (e.g. mimo-v2.5-pro). Overrides the agent's configured model; defaults to the agent's model, else the parent's. If no model_groups are configured, the tier names resolve to the default model."
+  "(optional) Model for this subagent: a model group name (e.g. ultra/standard/lite) or a literal provider/model (e.g. mimo-v2.5-pro). Overrides the agent's configured model; defaults to the agent's model, else the parent's. If no model_groups are configured, the tier names resolve to the default model. To discover valid provider/model values (e.g. a vision-capable model for image tasks), run `actor models` (or `actor models --vision`)."
 
-const KNOWN_ACTOR_VERBS = ["run", "spawn", "status", "wait", "cancel", "send"]
+const KNOWN_ACTOR_VERBS = ["run", "spawn", "status", "wait", "cancel", "send", "models"]
 
 function levenshteinActor(a: string, b: string): number {
   const m = a.length, n = b.length
@@ -64,6 +66,7 @@ type ActorShellArgs =
   | { operation: { action: "wait"; actor_id: string; timeout_ms?: number } }
   | { operation: { action: "cancel"; actor_id: string } }
   | { operation: { action: "send"; to_actor_id: string; content: string; to_session_id?: string; type?: string } }
+  | { operation: { action: "models"; vision?: boolean; limit?: number } }
 
 function actorArityError(verb: string, expected: string, args: string[], line: number) {
   return Effect.fail({
@@ -185,6 +188,20 @@ const mapActorVerb = Effect.fn("mapActorVerb")(function* (verb: string | undefin
         },
       } as ActorShellArgs
     }
+    case "models": {
+      const vision = args.includes("--vision")
+      const withoutVision = args.filter((a) => a !== "--vision")
+      const { flags, rest } = yield* extractNamedFlags(withoutVision, ["limit"], line)
+      if (rest.length !== 0)
+        return yield* actorArityError("models", "[--vision] [--limit <n>]", rest, line)
+      return {
+        operation: {
+          action: "models" as const,
+          ...(vision ? { vision: true } : {}),
+          ...(Number.isInteger(Number(flags.limit)) && Number(flags.limit) > 0 ? { limit: Number(flags.limit) } : {}),
+        },
+      } as ActorShellArgs
+    }
     default: {
       const suggestion = suggestActorVerb(verb ?? "")
       const detail =
@@ -271,7 +288,7 @@ export const ActorTool = Tool.define(
     const actorRegistry = yield* ActorRegistry.Service
     const checkpoint = yield* SessionCheckpoint.Service
     const waiter = yield* ActorWaiter.Service
-    const taskRegistry = yield* TaskRegistry.Service
+    const tasks = yield* TaskRegistry.Service
 
     // Resolve the Actor service through the late-bound spawnRef rather than as
     // a Layer dependency: pulling Actor.Service in here would create a layer
@@ -443,6 +460,12 @@ export const ActorTool = Tool.define(
           ),
       })
 
+      const modelsSchema = z.strictObject({
+        action: z.literal("models"),
+        vision: z.boolean().optional().describe("(optional) If true, list only vision-capable models (models that accept image input)."),
+        limit: z.number().int().positive().optional().describe("(optional) Max number of models to return. Default 50."),
+      })
+
       const parameters = z.strictObject({
         // .meta({ type: "object" }) is REQUIRED — without it the emitted JSON
         // schema's `operation` node has only `anyOf`, no `type`, and some models
@@ -459,6 +482,7 @@ export const ActorTool = Tool.define(
             waitSchema,
             cancelSchema,
             sendSchema,
+            modelsSchema,
           ])
           .meta({ type: "object" }),
       })
@@ -615,6 +639,24 @@ export const ActorTool = Tool.define(
           }
         }
 
+        if (op.action === "models") {
+          const providers = yield* provider.list()
+          const allModels = Object.values(providers).flatMap((info) => Object.values(info.models))
+          const filtered = op.vision ? allModels.filter((m) => m.capabilities.input.image === true) : allModels
+          const ordered = op.vision
+            ? sortVisionModels(filtered)
+            : [...filtered].sort((a, b) => `${a.providerID}/${a.id}`.localeCompare(`${b.providerID}/${b.id}`))
+          const limit = op.limit ?? 50
+          const shown = ordered.slice(0, limit)
+          const lines = shown.map((m) => `${m.providerID}/${m.id}${m.capabilities.input.image ? " (vision)" : ""}`)
+          const header = op.vision ? `Vision-capable models` : `Available models`
+          const more = ordered.length > shown.length ? `\n… and ${ordered.length - shown.length} more (raise --limit)` : ""
+          const output = shown.length === 0
+            ? (op.vision ? "No vision-capable models are configured. Configure a vision model or use an OCR tool." : "No models are configured.")
+            : `${header} (${shown.length} of ${ordered.length}):\n${lines.join("\n")}${more}\nPass any of these to actor --model.`
+          return { title: header, output, metadata: { count: shown.length, total: ordered.length, vision: !!op.vision } as Record<string, any> }
+        }
+
         // op.action ==="run" or "spawn" — schema guarantees
         // description / prompt / subagent_type are present and non-empty.
         if (!ctx.extra?.bypassAgentCheck) {
@@ -631,7 +673,11 @@ export const ActorTool = Tool.define(
 
         const next = yield* agent.get(op.subagent_type)
         if (!next) {
-          return yield* Effect.fail(new Error(`Unknown agent type: ${op.subagent_type} is not a valid agent type`))
+          return yield* Effect.fail(
+            new RecoverableError(
+              `Unknown agent type "${op.subagent_type}". Valid subagent_type values are listed in the actor tool description — pass one of those.`,
+            ),
+          )
         }
 
         let prompt = op.prompt
@@ -681,7 +727,7 @@ export const ActorTool = Tool.define(
             effectiveTaskId = undefined
             taskNotice = `note: task_id "${op.task_id}" is not a valid task ID (expected Tn or Tn.m); ran ad-hoc. Task IDs come from the \`task\` tool.`
           } else {
-            const existing = yield* taskRegistry.get({ session_id: ctx.sessionID, id: op.task_id })
+            const existing = yield* tasks.get({ session_id: ctx.sessionID, id: op.task_id })
             if (!existing) {
               effectiveTaskId = undefined
               taskNotice = `note: task_id "${op.task_id}" does not exist in this session; ran ad-hoc. Create it with the \`task\` tool first, or omit task_id.`
@@ -705,18 +751,14 @@ export const ActorTool = Tool.define(
           model,
           background,
           task_id: effectiveTaskId,
+          onReady: ({ actorID, sessionID }) =>
+            ctx.metadata({
+              title: op.description,
+              metadata: { sessionId: sessionID, actorId: actorID, model },
+            }),
           ...(op.output_schema
             ? { format: { type: "json_schema" as const, schema: op.output_schema, retryCount: 2 } }
             : {}),
-        })
-
-        yield* ctx.metadata({
-          title: op.description,
-          metadata: {
-            sessionId: spawnResult.sessionID,
-            actorId: spawnResult.actorID,
-            model,
-          },
         })
 
         if (op.action ==="spawn") {
@@ -725,7 +767,7 @@ export const ActorTool = Tool.define(
             metadata: { sessionId: spawnResult.sessionID, actorId: spawnResult.actorID, model },
             output:
               (taskNotice ? taskNotice + "\n" : "") +
-              `Background actor started. actor_id: ${spawnResult.actorID}\nThe result will be delivered as a notification when complete.`,
+              `Background sub-session started. actor_id: ${spawnResult.actorID}\nThe result will be delivered as a notification when complete.`,
           }
         }
 

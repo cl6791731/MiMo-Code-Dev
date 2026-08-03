@@ -26,6 +26,7 @@ import { InstanceState } from "@/effect"
 import { AppFileSystem } from "@mimo-ai/shared/filesystem"
 import { isRecord } from "@/util/record"
 import { withStatics } from "@/util/schema"
+import { isFreeApiModel, isFreeApiSunset } from "@/util/free-api-sunset"
 
 import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
@@ -38,6 +39,7 @@ const BUILTIN_TIERS = new Set(["ultra", "standard", "lite"])
 // F41: warn once per (providerID, modelID) when limit.context falls back to default
 const warnedContextDefaults = new Set<string>()
 
+export const DEFAULT_OPENAI_HEADER_TIMEOUT = 300_000
 export const DEFAULT_CHUNK_TIMEOUT = 480_000 // 8 minutes — bounds single-attempt SSE stall.
 // Tuned for mimo-v2.5-pro on MiMo Router whose cold-path TTFT after context
 // rebuild can dip to ~5 minutes silent. Reasoning models with multi-minute
@@ -97,6 +99,18 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
     status: res.status,
     statusText: res.statusText,
   })
+}
+
+function timeoutController(ms: number) {
+  const ctl = new AbortController()
+  const id = setTimeout(
+    () => ctl.abort(Object.assign(new Error(`Response header timed out after ${ms}ms`), { code: "ETIMEDOUT" })),
+    ms,
+  )
+  return {
+    signal: ctl.signal,
+    clear: () => clearTimeout(id),
+  }
 }
 
 type BundledSDK = {
@@ -174,16 +188,17 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         Boolean(yield* dep.auth(input.id)) ||
         Boolean((yield* dep.config()).provider?.["opencode"]?.options?.apiKey)
 
-      if (!ok) {
-        for (const [key, value] of Object.entries(input.models)) {
-          if (value.cost.input === 0) continue
-          delete input.models[key]
-        }
+      // Never surface the free/public tier (cost.input === 0). Without a
+      // subscription/key, hide the remaining (paid) models too — they can't be
+      // used unauthenticated. So: authenticated -> subscription models only,
+      // unauthenticated -> nothing.
+      for (const [key, value] of Object.entries(input.models)) {
+        if (!ok || value.cost.input === 0) delete input.models[key]
       }
 
       return {
         autoload: Object.keys(input.models).length > 0,
-        options: ok ? {} : { apiKey: "public" },
+        options: {},
       }
     }),
     openai: () =>
@@ -192,7 +207,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
           return sdk.responses(modelID)
         },
-        options: {},
+        options: { headerTimeout: DEFAULT_OPENAI_HEADER_TIMEOUT },
       }),
     xai: () =>
       Effect.succeed({
@@ -848,7 +863,7 @@ const ProviderModalities = Schema.Struct({
 const ProviderInterleaved = Schema.Union([
   Schema.Boolean,
   Schema.Struct({
-    field: Schema.Literals(["reasoning_content", "reasoning_details"]),
+    field: Schema.Literals(["reasoning", "reasoning_content", "reasoning_details"]),
   }),
 ])
 
@@ -926,6 +941,7 @@ export const ListResult = Schema.Struct({
   all: Schema.Array(Info),
   default: DefaultModelIDs,
   connected: Schema.Array(Schema.String),
+  authenticated: Schema.Array(Schema.String),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ListResult = Types.DeepMutable<Schema.Schema.Type<typeof ListResult>>
 
@@ -949,6 +965,7 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderID) => Effect.Effect<Model | undefined>
+  readonly getVisionModel: () => Effect.Effect<Model | undefined>
   readonly resolveModelRef: (ref: string, contextProviderID?: ProviderID) => Effect.Effect<Model>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderID; modelID: ModelID }>
 }
@@ -962,6 +979,15 @@ interface State {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
+
+export function sortVisionModels(models: Model[]): Model[] {
+  const inHouse = (m: Model) => m.providerID === "mimo" || m.providerID === "xiaomi"
+  return [...models].sort((a, b) => {
+    if (inHouse(a) !== inHouse(b)) return inHouse(a) ? -1 : 1
+    if (a.cost.input !== b.cost.input) return a.cost.input - b.cost.input
+    return `${a.providerID}/${a.id}`.localeCompare(`${b.providerID}/${b.id}`)
+  })
+}
 
 function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   const result: Model["cost"] = {
@@ -1238,6 +1264,11 @@ const layer: Layer.Layer<
               cachePromptTTL: model.cachePromptTTL ?? existingModel?.cachePromptTTL,
               variants: {},
             }
+            // mimo-auto is a free-tier routing alias absent from models.dev; it routes to a
+            // vision-capable model, so image input is supported.
+            if (providerID === "mimo" && modelID === "mimo-auto") {
+              parsedModel.capabilities.input.image = true
+            }
             const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
@@ -1355,7 +1386,7 @@ const layer: Layer.Layer<
           const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
 
           provider.models = yield* Effect.promise(async () => {
-            const next = await models(provider, { auth: pluginAuth })
+            const next = await models(provider as any, { auth: pluginAuth })
             return Object.fromEntries(
               Object.entries(next).map(([id, model]) => [
                 id,
@@ -1377,6 +1408,13 @@ const layer: Layer.Layer<
           }
 
           const configProvider = cfg.provider?.[providerID]
+          // Opt-in implicit whitelist: only when the provider sets
+          // `only_configured_models: true` does a non-empty `models` map hide the
+          // rest of the catalog. Default (false) preserves the augment-only
+          // behavior — `models` overrides/adds without filtering.
+          const configModelKeys = Object.keys(configProvider?.models ?? {})
+          const implicitWhitelist =
+            configProvider?.only_configured_models && configModelKeys.length > 0 ? configModelKeys : undefined
 
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
@@ -1389,7 +1427,8 @@ const layer: Layer.Layer<
             if (model.status === "deprecated") delete provider.models[modelID]
             if (
               (configProvider?.blacklist && configProvider.blacklist.includes(modelID)) ||
-              (configProvider?.whitelist && !configProvider.whitelist.includes(modelID))
+              (configProvider?.whitelist && !configProvider.whitelist.includes(modelID)) ||
+              (implicitWhitelist && !implicitWhitelist.includes(modelID))
             )
               delete provider.models[modelID]
 
@@ -1482,46 +1521,36 @@ const layer: Layer.Layer<
 
         const customFetch = options["fetch"]
         const userChunkTimeout = options["chunkTimeout"]
+        const headerTimeout = options["headerTimeout"]
         const chunkTimeout =
           typeof userChunkTimeout === "number"
             ? userChunkTimeout  // user-set value (incl. 0 / negative to disable)
             : DEFAULT_CHUNK_TIMEOUT
         delete options["chunkTimeout"]
+        delete options["headerTimeout"]
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = init ?? {}
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
+          const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
+          const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined
           const signals: AbortSignal[] = []
 
           if (opts.signal) signals.push(opts.signal)
           if (chunkAbortCtl) signals.push(chunkAbortCtl.signal)
+          if (headerTimeoutCtl) signals.push(headerTimeoutCtl.signal)
           if (options["timeout"] !== undefined && options["timeout"] !== null && options["timeout"] !== false)
             signals.push(AbortSignal.timeout(options["timeout"]))
 
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
 
-          // Strip openai itemId metadata following what codex does
-          if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
-            const body = JSON.parse(opts.body as string)
-            const isAzure = model.providerID.includes("azure")
-            const keepIds = isAzure && body.store === true
-            if (!keepIds && Array.isArray(body.input)) {
-              for (const item of body.input) {
-                if ("id" in item) {
-                  delete item.id
-                }
-              }
-              opts.body = JSON.stringify(body)
-            }
-          }
-
           const res = await fetchFn(input, {
             ...opts,
             // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
             timeout: false,
-          })
+          }).finally(() => headerTimeoutCtl?.clear())
 
           if (!chunkAbortCtl) return res
           return wrapSSE(res, chunkTimeout, chunkAbortCtl)
@@ -1592,6 +1621,9 @@ const layer: Layer.Layer<
     })
 
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
+      if (isFreeApiSunset() && isFreeApiModel({ providerID: model.providerID, modelID: model.id })) {
+        throw new Error("MiMo free API service has ended. Sign in or configure a third-party API.")
+      }
       const s = yield* InstanceState.get(state)
       const envs = yield* env.all()
       const key = `${model.providerID}/${model.id}`
@@ -1691,6 +1723,26 @@ const layer: Layer.Layer<
       return yield* resolveModelRef("lite", providerID)
     })
 
+    const getVisionModel = Effect.fn("Provider.getVisionModel")(function* () {
+      const cfg = yield* config.get()
+      // Explicit vision_model literal wins. getModel raises ModelNotFoundError as
+      // a defect, so a misconfigured vision_model must not propagate — catch it and
+      // fall back to the smart default.
+      if (cfg.vision_model) {
+        const parsed = parseModel(cfg.vision_model)
+        const explicit = yield* getModel(parsed.providerID, parsed.modelID).pipe(
+          Effect.catchDefect(() => Effect.succeed(undefined)),
+        )
+        if (explicit) return explicit
+      }
+      // Smart default: in-house preferred, then cheapest vision-capable model.
+      const providers = yield* list()
+      const vision = Object.values(providers)
+        .flatMap((info) => Object.values(info.models))
+        .filter((m) => m.capabilities.input.image === true)
+      return sortVisionModels(vision)[0]
+    })
+
     const defaultModel = Effect.fn("Provider.defaultModel")(function* () {
       const cfg = yield* config.get()
       if (cfg.model) return parseModel(cfg.model)
@@ -1730,7 +1782,7 @@ const layer: Layer.Layer<
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel, resolveModelRef })
+    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, getVisionModel, defaultModel, resolveModelRef })
   }),
 )
 

@@ -18,7 +18,9 @@ import { Instance } from "../project/instance"
 import { SessionCwd } from "./session-cwd"
 import { Snapshot } from "@/snapshot"
 import { assertWriteAllowed, askEditUnlessMemory } from "./external-directory"
+import { assertFileRead } from "./read-state"
 import { AppFileSystem } from "@mimo-ai/shared/filesystem"
+import { Flag } from "@/flag/flag"
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
@@ -46,10 +48,10 @@ function lock(filePath: string) {
 }
 
 const Parameters = z.object({
-  filePath: z.string().describe("The absolute path to the file to modify"),
-  oldString: z.string().describe("The text to replace"),
-  newString: z.string().describe("The text to replace it with (must be different from oldString)"),
-  replaceAll: z.boolean().optional().describe("Replace all occurrences of oldString (default false)"),
+  file_path: z.string().describe("The absolute path to the file to modify"),
+  old_string: z.string().describe("The text to replace"),
+  new_string: z.string().describe("The text to replace it with (must be different from old_string)"),
+  replace_all: z.boolean().optional().describe("Replace all occurrences of old_string (default false)"),
 })
 
 export const EditTool = Tool.define(
@@ -65,33 +67,40 @@ export const EditTool = Tool.define(
       parameters: Parameters,
       execute: (params: z.infer<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
-          if (!params.filePath) {
-            throw new Error("filePath is required")
+          if (!params.file_path) {
+            throw new Error("file_path is required")
           }
 
-          if (params.oldString === params.newString) {
-            throw new Error("No changes to apply: oldString and newString are identical.")
+          if (params.old_string === params.new_string) {
+            throw new Error("No changes to apply: old_string and new_string are identical.")
           }
 
-          const filePath = path.isAbsolute(params.filePath)
-            ? params.filePath
-            : path.join(SessionCwd.get(ctx.sessionID), params.filePath)
+          const filePath = path.isAbsolute(params.file_path)
+            ? params.file_path
+            : path.join(SessionCwd.get(ctx.sessionID), params.file_path)
           yield* assertWriteAllowed(ctx, filePath)
+
+          // The "create new file" branch (oldString === "") is effectively a
+          // write, so a prior Read isn't meaningful there. For real edits we
+          // require Read first so the model is operating on current contents.
+          if (params.old_string !== "") {
+            assertFileRead(ctx, filePath, "edit")
+          }
 
           let diff = ""
           let contentOld = ""
           let contentNew = ""
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
-              if (params.oldString === "") {
+              if (params.old_string === "") {
                 const existed = yield* afs.existsSafe(filePath)
-                contentNew = params.newString
+                contentNew = params.new_string
                 diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
                 yield* askEditUnlessMemory(ctx, filePath, {
                   patterns: [path.relative(Instance.worktree, filePath)],
                   diff,
                 })
-                yield* afs.writeWithDirs(filePath, params.newString)
+                yield* afs.writeWithDirs(filePath, params.new_string)
                 yield* format.file(filePath)
                 yield* bus.publish(File.Event.Edited, { file: filePath })
                 yield* bus.publish(FileWatcher.Event.Updated, {
@@ -107,10 +116,10 @@ export const EditTool = Tool.define(
               contentOld = yield* afs.readFileString(filePath)
 
               const ending = detectLineEnding(contentOld)
-              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
-              const next = convertToLineEnding(normalizeLineEndings(params.newString), ending)
+              const old = convertToLineEnding(normalizeLineEndings(params.old_string), ending)
+              const next = convertToLineEnding(normalizeLineEndings(params.new_string), ending)
 
-              contentNew = replace(contentOld, old, next, params.replaceAll)
+              contentNew = replace(contentOld, old, next, params.replace_all)
 
               diff = trimDiff(
                 createTwoFilesPatch(
@@ -183,6 +192,42 @@ export const EditTool = Tool.define(
     }
   }),
 )
+
+export function trimDiff(diff: string): string {
+  const lines = diff.split("\n")
+  const contentLines = lines.filter(
+    (line) =>
+      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
+      !line.startsWith("---") &&
+      !line.startsWith("+++"),
+  )
+
+  if (contentLines.length === 0) return diff
+
+  let min = Infinity
+  for (const line of contentLines) {
+    const content = line.slice(1)
+    if (content.trim().length > 0) {
+      const match = content.match(/^(\s*)/)
+      if (match) min = Math.min(min, match[1].length)
+    }
+  }
+  if (min === Infinity || min === 0) return diff
+  const trimmedLines = lines.map((line) => {
+    if (
+      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
+      !line.startsWith("---") &&
+      !line.startsWith("+++")
+    ) {
+      const prefix = line[0]
+      const content = line.slice(1)
+      return prefix + content.slice(min)
+    }
+    return line
+  })
+
+  return trimmedLines.join("\n")
+}
 
 export type Replacer = (content: string, find: string) => Generator<string, void, unknown>
 
@@ -609,47 +654,31 @@ export const ContextAwareReplacer: Replacer = function* (content, find) {
   }
 }
 
-export function trimDiff(diff: string): string {
-  const lines = diff.split("\n")
-  const contentLines = lines.filter(
-    (line) =>
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-      !line.startsWith("---") &&
-      !line.startsWith("+++"),
-  )
-
-  if (contentLines.length === 0) return diff
-
-  let min = Infinity
-  for (const line of contentLines) {
-    const content = line.slice(1)
-    if (content.trim().length > 0) {
-      const match = content.match(/^(\s*)/)
-      if (match) min = Math.min(min, match[1].length)
-    }
-  }
-  if (min === Infinity || min === 0) return diff
-  const trimmedLines = lines.map((line) => {
-    if (
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-      !line.startsWith("---") &&
-      !line.startsWith("+++")
-    ) {
-      const prefix = line[0]
-      const content = line.slice(1)
-      return prefix + content.slice(min)
-    }
-    return line
-  })
-
-  return trimmedLines.join("\n")
-}
-
 export function replace(content: string, oldString: string, newString: string, replaceAll = false): string {
   if (oldString === newString) {
-    throw new Error("No changes to apply: oldString and newString are identical.")
+    throw new Error("No changes to apply: old_string and new_string are identical.")
   }
 
+  // Default: pure exact match with explicit, actionable errors. Set
+  // MIMOCODE_ENABLE_FUZZY_EDIT=true to opt into the legacy fuzzy fallback chain.
+  if (!Flag.MIMOCODE_ENABLE_FUZZY_EDIT) {
+    const firstIndex = content.indexOf(oldString)
+    if (firstIndex === -1) {
+      throw new Error(buildNotFoundError(content, oldString))
+    }
+    if (replaceAll) {
+      return content.replaceAll(oldString, newString)
+    }
+    const matches = content.split(oldString).length - 1
+    if (matches > 1) {
+      throw new Error(
+        `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, provide more surrounding context to make the match unique.\nString: ${oldString}`,
+      )
+    }
+    return content.substring(0, firstIndex) + newString + content.substring(firstIndex + oldString.length)
+  }
+
+  // Fuzzy fallback chain (opt-in via MIMOCODE_ENABLE_FUZZY_EDIT)
   let notFound = true
 
   for (const replacer of [
@@ -677,9 +706,47 @@ export function replace(content: string, oldString: string, newString: string, r
   }
 
   if (notFound) {
-    throw new Error(
-      "Could not find oldString in the file. It must match exactly, including whitespace, indentation, and line endings.",
-    )
+    throw new Error(buildNotFoundError(content, oldString))
   }
-  throw new Error("Found multiple matches for oldString. Provide more surrounding context to make the match unique.")
+  throw new Error(
+    `Found multiple matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, provide more surrounding context to make the match unique.\nString: ${oldString}`,
+  )
+}
+
+// Cap on the closest-match hint to keep error messages bounded. Long enough to
+// show a meaningful surrounding block; short enough to not flood the tool result.
+const CLOSEST_MATCH_HINT_MAX_CHARS = 2000
+
+function buildNotFoundError(content: string, oldString: string): string {
+  const base = `String to replace not found in file. It must match exactly, including whitespace, indentation, and line endings.\nString: ${oldString}`
+  const hint = findClosestMatch(content, oldString)
+  if (!hint) return base
+  const truncated =
+    hint.length > CLOSEST_MATCH_HINT_MAX_CHARS
+      ? hint.slice(0, CLOSEST_MATCH_HINT_MAX_CHARS) + "\n... (truncated)"
+      : hint
+  return `${base}\n\nClosest match found in file (note the exact whitespace / indentation / line endings — resubmit old_string copying this verbatim):\n${truncated}`
+}
+
+// Try the fuzzy Replacers in order of specificity and return the first block
+// from the file that "looks like" oldString. Used only to enrich error messages
+// — never to silently apply an edit. SimpleReplacer/MultiOccurrenceReplacer are
+// skipped because they yield oldString itself, which is useless as a hint.
+function findClosestMatch(content: string, oldString: string): string | undefined {
+  for (const replacer of [
+    LineTrimmedReplacer,
+    BlockAnchorReplacer,
+    IndentationFlexibleReplacer,
+    WhitespaceNormalizedReplacer,
+    TrimmedBoundaryReplacer,
+    EscapeNormalizedReplacer,
+    ContextAwareReplacer,
+  ]) {
+    for (const match of replacer(content, oldString)) {
+      if (match && match !== oldString && content.includes(match)) {
+        return match
+      }
+    }
+  }
+  return undefined
 }
