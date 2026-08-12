@@ -180,25 +180,33 @@ else
         fi
     fi
 
-    if [ -z "$requested_version" ]; then
-        url="https://github.com/XiaomiMiMo/MiMo-Code/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/XiaomiMiMo/MiMo-Code/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+    # Download from Xiaomi FDS (fast in mainland China). Layout:
+    #   $MIMO_FDS_BASE/releases/latest          -> text file containing the latest version (e.g. 0.1.0)
+    #   $MIMO_FDS_BASE/releases/v<version>/<filename>
+    fds_base="${MIMO_FDS_BASE:-https://mimocode.cnbj1.mi-fds.com/mimocode/mimocode}"
+    fds_base="${fds_base%/}"
 
-        if [[ $? -ne 0 || -z "$specific_version" ]]; then
+    if [ -z "$requested_version" ]; then
+        specific_version=$(curl -fsSL "${fds_base}/releases/latest" 2>/dev/null | tr -d '[:space:]' | sed 's/^v//')
+
+        if [ -z "$specific_version" ]; then
             echo -e "${RED}Failed to fetch version information${NC}"
+            echo -e "${MUTED}Could not resolve the latest release from FDS. Please check your network and retry,${NC}"
+            echo -e "${MUTED}or install a specific version, e.g.: bash -s -- --version 0.1.0${NC}"
             exit 1
         fi
+        url="${fds_base}/releases/v${specific_version}/$filename"
     else
         # Strip leading 'v' if present
         requested_version="${requested_version#v}"
-        url="https://github.com/XiaomiMiMo/MiMo-Code/releases/download/v${requested_version}/$filename"
         specific_version=$requested_version
+        url="${fds_base}/releases/v${requested_version}/$filename"
 
-        # Verify the release exists before downloading
-        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/XiaomiMiMo/MiMo-Code/releases/tag/v${requested_version}")
+        # Verify the artifact exists before downloading
+        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "$url")
         if [ "$http_status" = "404" ]; then
             echo -e "${RED}Error: Release v${requested_version} not found${NC}"
-            echo -e "${MUTED}Available releases: https://github.com/XiaomiMiMo/MiMo-Code/releases${NC}"
+            echo -e "${MUTED}Checked: ${url}${NC}"
             exit 1
         fi
     fi
@@ -365,10 +373,12 @@ add_to_path() {
 
     if grep -Fxq "$command" "$config_file"; then
         print_message info "Command already exists in $config_file, skipping write."
+        path_written=true
     elif [[ -w $config_file ]]; then
         echo -e "\n# mimocode" >> "$config_file"
         echo "$command" >> "$config_file"
         print_message info "${MUTED}Successfully added ${NC}mimocode ${MUTED}to \$PATH in ${NC}$config_file"
+        path_written=true
     else
         print_message warning "Manually add the directory to $config_file (or similar):"
         print_message info "  $command"
@@ -402,6 +412,7 @@ esac
 
 if [[ "$no_modify_path" != "true" ]]; then
     config_file=""
+    path_written=false
     for file in $config_files; do
         if [[ -f $file ]]; then
             config_file=$file
@@ -444,16 +455,38 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
 fi
 
 echo -e ""
-echo -e "${MUTED}                    ${NC}             ▄     "
-echo -e "${MUTED}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ ${NC}█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
-echo -e "${MUTED}█░░█ █░░█ █▀▀▀ █░░█ ${NC}█░░░ █░░█ █░░█ █▀▀▀"
-echo -e "${MUTED}▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ${NC}▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
+# Show classic (bold) logo when terminal is wide enough, thin otherwise
+term_width=$(tput cols 2>/dev/null || echo 80)
+if [ "$term_width" -ge 80 ] 2>/dev/null; then
+    echo -e "${MUTED}  ███╗   ███╗ ██╗ ███╗   ███╗  ██████╗ ${NC}   ██████╗  ██████╗  ██████╗  ███████╗"
+    echo -e "${MUTED}  ████╗ ████║ ██║ ████╗ ████║ ██╔═══██╗${NC}  ██╔════╝ ██╔═══██╗ ██╔══██╗ ██╔════╝"
+    echo -e "${MUTED}  ██╔████╔██║ ██║ ██╔████╔██║ ██║   ██║${NC}  ██║      ██║   ██║ ██║  ██║ █████╗  "
+    echo -e "${MUTED}  ██║╚██╔╝██║ ██║ ██║╚██╔╝██║ ██║   ██║${NC}  ██║      ██║   ██║ ██║  ██║ ██╔══╝  "
+    echo -e "${MUTED}  ██║ ╚═╝ ██║ ██║ ██║ ╚═╝ ██║ ╚██████╔╝${NC}  ╚██████╗ ╚██████╔╝ ██████╔╝ ███████╗"
+    echo -e "${MUTED}  ╚═╝     ╚═╝ ╚═╝ ╚═╝     ╚═╝  ╚═════╝ ${NC}   ╚═════╝  ╚═════╝  ╚═════╝  ╚══════╝"
+else
+    echo -e "${MUTED}█▀▄▀█ █ █▀▄▀█ █▀▀█${NC}  █▀▀ █▀▀█ █▀▀▄ █▀▀▀"
+    echo -e "${MUTED}█ ▀ █ █ █ ▀ █ █  █${NC}  █   █  █ █  █ █▀▀ "
+    echo -e "${MUTED}▀   ▀ ▀ ▀   ▀ ▀▀▀▀${NC}  ▀▀▀ ▀▀▀▀ ▀▀▀  ▀▀▀▀"
+fi
 echo -e ""
 echo -e ""
-echo -e "${MUTED}To start:${NC}"
-echo -e ""
-echo -e "cd <project>  ${MUTED}# Open directory${NC}"
-echo -e "mimo          ${MUTED}# Run command${NC}"
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    echo -e "${MUTED}To get started, run:${NC}"
+    echo -e ""
+    if [[ "${path_written:-}" == "true" && -n "${config_file:-}" ]]; then
+        echo -e "source $config_file  ${MUTED}# or open a new terminal${NC}"
+    else
+        echo -e "export PATH=$INSTALL_DIR:\$PATH"
+    fi
+    echo -e "cd <project>"
+    echo -e "mimo"
+else
+    echo -e "${MUTED}To start:${NC}"
+    echo -e ""
+    echo -e "cd <project>  ${MUTED}# Open directory${NC}"
+    echo -e "mimo          ${MUTED}# Run command${NC}"
+fi
 echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://mimo.xiaomi.com/coder/docs"
 echo -e ""

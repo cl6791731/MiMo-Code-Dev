@@ -1,9 +1,14 @@
-- Always use superpowers skill instead of builtin plan mode.
+- Use MiMoCode Compose skills when available, otherwise use superpowers skill if installed.
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+- The default branch in this repo is `main`.
+- CI triggers on both `main` and `dev` branches.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
+- Install deps with `bun ci` (= `bun install --frozen-lockfile`) — install per `bun.lock`, don't mutate the lockfile. ⛔ Do NOT use `bun install`/`npm install`.
+
+## Core Focus (as of 2025-06-18)
+
+Our core development focus is the **TUI** (terminal UI) implementation in `packages/opencode/src/cli/cmd/tui/`. We do not currently provide support for Web or App interfaces. All operations should default to checking the TUI implementation first.
 
 ## Style Guide
 
@@ -92,6 +97,29 @@ const table = sqliteTable("session", {
   createdAt: integer("created_at").notNull(),
 })
 ```
+
+### Reading a nullable column
+
+Two independent absences meet in one expression, and only one of them is
+`undefined`. `.get()` yields `undefined` when no row matches — Drizzle normalises
+the driver's `null` there — while a nullable column's SQL `NULL` arrives as
+`null`. So `row?.some_column` is `T | null | undefined`.
+
+When a caller only asks "is there a value", flatten to `undefined`, and write the
+flattening as an annotation rather than an `as` cast:
+
+```ts
+// Good — the compiler enforces it; deleting the `?? undefined` is a type error
+const boundary: MessageID | undefined = row?.last_checkpoint_message_id ?? undefined
+
+// Bad — the cast removes `null` from the union without converting anything,
+// so the declared type is untrue at runtime
+return row?.last_checkpoint_message_id as MessageID | undefined
+```
+
+Discriminate a possibly-absent value with truthiness or `== null`, never with
+`=== undefined` / `!== undefined`. Because `null !== undefined` is `true`, such a
+guard typechecks, reads correctly in review, and does nothing.
 
 ## Testing
 
