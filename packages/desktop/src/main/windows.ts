@@ -1,7 +1,9 @@
 import windowState from "electron-window-state"
-import { app, BrowserWindow, net, nativeImage, nativeTheme, protocol } from "electron"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { app, BrowserWindow, nativeImage, nativeTheme, protocol } from "electron"
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { readFile } from "node:fs/promises"
+import log from "electron-log/main.js"
 import type { TitlebarTheme } from "../preload/types"
 
 const root = dirname(fileURLToPath(import.meta.url))
@@ -158,7 +160,7 @@ export function createLoadingWindow() {
 export function registerRendererProtocol() {
   if (protocol.isProtocolHandled(rendererProtocol)) return
 
-  protocol.handle(rendererProtocol, (request) => {
+  protocol.handle(rendererProtocol, async (request) => {
     const url = new URL(request.url)
     if (url.host !== rendererHost) {
       return new Response("Not found", { status: 404 })
@@ -170,8 +172,49 @@ export function registerRendererProtocol() {
       return new Response("Not found", { status: 404 })
     }
 
-    return net.fetch(pathToFileURL(file).toString())
+    try {
+      // Read through fs so asar archives are resolved (net.fetch does not go
+      // through Electron's asar patch and fails to serve packaged renderer).
+      const data = await readFile(file)
+      const mime = mimeType(extname(file))
+      return new Response(data, { headers: { "Content-Type": mime } })
+    } catch {
+      return new Response("Not found", { status: 404 })
+    }
   })
+}
+
+function mimeType(ext: string): string {
+  switch (ext) {
+    case ".html":
+      return "text/html"
+    case ".js":
+    case ".mjs":
+      return "text/javascript"
+    case ".css":
+      return "text/css"
+    case ".json":
+      return "application/json"
+    case ".svg":
+      return "image/svg+xml"
+    case ".png":
+      return "image/png"
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg"
+    case ".gif":
+      return "image/gif"
+    case ".ico":
+      return "image/x-icon"
+    case ".woff":
+      return "font/woff"
+    case ".woff2":
+      return "font/woff2"
+    case ".wasm":
+      return "application/wasm"
+    default:
+      return "application/octet-stream"
+  }
 }
 
 function loadWindow(win: BrowserWindow, html: string) {
@@ -181,6 +224,16 @@ function loadWindow(win: BrowserWindow, html: string) {
     void win.loadURL(url.toString())
     return
   }
+
+  win.webContents.on("did-fail-load", (_event, code, desc, url) => {
+    log.error("[renderer] did-fail-load", code, desc, url)
+  })
+  win.webContents.on("render-process-gone", (_event, details) => {
+    log.error("[renderer] render-process-gone", JSON.stringify(details))
+  })
+  win.webContents.on("console-message", (_event, level, message) => {
+    if (level >= 2) log.info("[renderer:console]", message)
+  })
 
   void win.loadURL(`${rendererProtocol}://${rendererHost}/${html}`)
 }
