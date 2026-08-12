@@ -1,6 +1,6 @@
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
 import { Effect, Layer } from "effect"
-import { afterAll, beforeAll, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import path from "path"
 import type { Permission } from "../../src/permission"
 import type { Tool } from "../../src/tool"
@@ -11,22 +11,11 @@ import { ToolRegistry } from "../../src/tool"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { withEnv } from "../lib/env"
 
-
-// The compose-next invisibility test below needs the builtin bundle extracted;
-// other test files in the same process (e.g. test/skill/skill.test.ts) set
-// MIMOCODE_DISABLE_BUILTIN_SKILLS at module top-level and never restore it.
-// The Flag getter reads env lazily, so clear it here and restore afterwards.
-const savedEnv = process.env.MIMOCODE_DISABLE_BUILTIN_SKILLS
-
-beforeAll(() => {
-  delete process.env.MIMOCODE_DISABLE_BUILTIN_SKILLS
-})
-
-afterAll(() => {
-  if (savedEnv === undefined) delete process.env.MIMOCODE_DISABLE_BUILTIN_SKILLS
-  else process.env.MIMOCODE_DISABLE_BUILTIN_SKILLS = savedEnv
-})
+// The compose-next invisibility test below needs the builtin bundle extracted,
+// and sibling files disable it, so force it back on for this file only.
+withEnv({ MIMOCODE_DISABLE_BUILTIN_SKILLS: undefined })
 
 const it = testEffect(
   Layer.mergeAll(ToolRegistry.defaultLayer, Agent.defaultLayer, Skill.defaultLayer, CrossSpawnSpawner.defaultLayer),
@@ -204,12 +193,12 @@ description: Analyze quasar telemetry and operational metrics.
     ),
   )
 
-  // Regression: compose-next is a builtin skill that ships in Skill.all() so
-  // the /compose-next slash command works, but the default agent's
-  // "compose-next: deny" skill permission must keep it out of
-  // Skill.available(agent) — and skill_search reads from available(), not all().
-  // A model asking a query that would otherwise match compose-next must get
-  // no hit under Build, Plan, or Compose.
+  // Regression: compose-next is a builtin skill that ships in Skill.all() and
+  // is permission-allowed so the /compose-next slash command works, but its
+  // SKILL.md sets disable-model-invocation, which must keep it out of
+  // Skill.modelInvocable(agent) — and skill_search reads from modelInvocable,
+  // not available() or all(). A model asking a query that would otherwise match
+  // compose-next must get no hit under Build, Plan, or Compose.
   it.live.skip("does not surface compose-next to any primary agent's skill_search", () =>
     provideTmpdirInstance(
       () =>
@@ -233,11 +222,18 @@ description: Analyze quasar telemetry and operational metrics.
             const agent = yield* agents.get(agentName)
             expect(agent).toBeDefined()
 
-            // Sanity: compose-next is filtered out of the agent's available skills.
+            // The user surface keeps it: a slash invocation must still resolve.
             const available = yield* skills.available(agent!)
             expect(
-              available.every((s) => s.name !== "compose-next"),
-              `compose-next must be absent from Skill.available(${agentName}) via the default agent's exact-name deny rule`,
+              available.some((s) => s.name === "compose-next"),
+              `compose-next must stay in Skill.available(${agentName}) so /compose-next injects its body`,
+            ).toBe(true)
+
+            // The model surface drops it, via disable-model-invocation.
+            const modelInvocable = yield* skills.modelInvocable(agent!)
+            expect(
+              modelInvocable.every((s) => s.name !== "compose-next"),
+              `compose-next must be absent from Skill.modelInvocable(${agentName}) via disable-model-invocation`,
             ).toBe(true)
 
             const tool = (yield* registry.tools({
