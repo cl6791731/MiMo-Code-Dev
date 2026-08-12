@@ -5,6 +5,7 @@
 import fs from "fs/promises"
 import { existsSync, readFileSync } from "fs"
 import path from "path"
+import { createHash } from "node:crypto"
 
 function polyfill() {
   if (typeof (globalThis as any).Bun !== "undefined") return
@@ -26,7 +27,8 @@ function polyfill() {
       },
       arrayBuffer: async (): Promise<ArrayBuffer> => {
         const buffer = await fs.readFile(filePath)
-        return buffer.buffer
+        // Return only the file's bytes (Buffer may share a larger pool).
+        return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
       },
       exists: async (): Promise<boolean> => {
         return existsSync(filePath)
@@ -105,10 +107,37 @@ function polyfill() {
     return [...str].length
   }
 
+  /**
+   * Bun.CryptoHasher polyfill backed by node:crypto.
+   * Supports the subset used by the bundled opencode server:
+   *   new Bun.CryptoHasher("sha256").update(data).digest("hex")
+   * update() is chainable; digest() without an encoding returns an ArrayBuffer.
+   */
+  class CryptoHasher {
+    private hash: ReturnType<typeof createHash>
+    constructor(algorithm: string) {
+      const normalized = algorithm.toLowerCase().replace(/-/g, "")
+      this.hash = createHash(normalized)
+    }
+    update(data: string | ArrayBuffer | Uint8Array) {
+      this.hash.update(data as any)
+      return this
+    }
+    digest(encoding?: "hex" | "base64" | "base64url" | "latin1") {
+      if (encoding) return this.hash.digest(encoding as any)
+      const buf = this.hash.digest()
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+    }
+  }
+
+  const bunArgv = ["bun", ...process.argv.slice(1)]
+
   ;(globalThis as any).Bun = {
     file: bunFile,
     write: bunWrite,
     stringWidth: bunStringWidth,
+    CryptoHasher,
+    argv: bunArgv,
     version: "0.0.0-polyfill",
     $: undefined,
   }

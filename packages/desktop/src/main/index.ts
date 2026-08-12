@@ -205,7 +205,20 @@ async function initialize() {
     }
   }
 
-  await loadingTask
+  // The sidecar (bundled opencode server) can take a while to import at
+  // runtime, and in rare cases the 22MB module load hangs. Never block the
+  // window on it indefinitely: wait with a generous timeout, then proceed so
+  // the UI always appears (the server keeps initializing in the background).
+  const loadResult = await Promise.race([
+    loadingTask.then(() => "ok" as const),
+    delay(60_000).then(() => "timeout" as const),
+  ]).catch((error) => {
+    logger.error("loading task failed", error)
+    return "error" as const
+  })
+  if (loadResult !== "ok") {
+    logger.warn("loading task did not complete cleanly", { result: loadResult })
+  }
   setInitStep({ phase: "done" })
 
   if (overlay) {

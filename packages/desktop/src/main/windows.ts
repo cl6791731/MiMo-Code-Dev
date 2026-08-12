@@ -177,7 +177,17 @@ export function registerRendererProtocol() {
       // through Electron's asar patch and fails to serve packaged renderer).
       const data = await readFile(file)
       const mime = mimeType(extname(file))
-      return new Response(data, { headers: { "Content-Type": mime } })
+      // Wrap in Uint8Array so `Buffer<ArrayBufferLike>` satisfies BodyInit.
+      return new Response(new Uint8Array(data), {
+        headers: {
+          "Content-Type": mime,
+          // Module scripts loaded with `crossorigin` require CORS headers on
+          // custom protocol responses, otherwise Chromium silently drops them
+          // and the renderer stays blank.
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        },
+      })
     } catch {
       return new Response("Not found", { status: 404 })
     }
@@ -225,14 +235,35 @@ function loadWindow(win: BrowserWindow, html: string) {
     return
   }
 
+  win.webContents.on("did-finish-load", () => {
+    log.info("[renderer] did-finish-load", html)
+    void win.webContents.executeJavaScript(
+      `new Promise(resolve => setTimeout(() => {
+        const root = document.getElementById('root')
+        resolve({
+          title: document.title,
+          readyState: document.readyState,
+          bodyHtml: (document.body ? document.body.innerHTML : '').slice(0, 400),
+          rootChildren: root ? root.childElementCount : -1,
+          resources: performance.getEntriesByType('resource').map(r => r.name.slice(0, 110)),
+        })
+      }, 3000))`,
+      true,
+    ).then((r: any) => log.info("[renderer:dom]", JSON.stringify(r))).catch((e: any) => log.error("[renderer:dom] failed", String(e)))
+  })
   win.webContents.on("did-fail-load", (_event, code, desc, url) => {
     log.error("[renderer] did-fail-load", code, desc, url)
   })
-  win.webContents.on("render-process-gone", (_event, details) => {
+  // `render-process-gone` exists at runtime on WebContents but is missing from
+  // the Electron 41 type-definition overloads, so pin it through `any`.
+  ;(win.webContents as any).on("render-process-gone", (_event: any, _webContents: any, details: any) => {
     log.error("[renderer] render-process-gone", JSON.stringify(details))
   })
-  win.webContents.on("console-message", (_event, level, message) => {
-    if (level >= 2) log.info("[renderer:console]", message)
+  // Electron >= 32 passes a MessageDetails object as the second argument, but
+  // the type definitions also carry the legacy (level, message) overload, so
+  // pin the listener parameters to the runtime shape.
+  win.webContents.on("console-message", (_event: Electron.Event, details: any) => {
+    if (details.level >= 2) log.info("[renderer:console]", details.message)
   })
 
   void win.loadURL(`${rendererProtocol}://${rendererHost}/${html}`)
