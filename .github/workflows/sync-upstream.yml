@@ -55,7 +55,12 @@ jobs:
             TAG="${{ inputs.tag }}"
           else
             # Fetch the latest release tag from upstream without pulling tags.
-            TAG=$(gh release list -R XiaomiMiMo/MiMo-Code --json tagName --jq '.[0].tagName' 2>/dev/null)
+            # gh release list may fail (exit code 4) on rate-limit or auth issues;
+            # fall back to git ls-remote which works without credentials.
+            TAG=$(gh release list -R XiaomiMiMo/MiMo-Code --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null) || true
+            if [ -z "$TAG" ]; then
+              TAG=$(git ls-remote --tags --ref upstream 'v*' 2>/dev/null | sed 's|.*refs/tags/||' | sort -V | tail -1) || true
+            fi
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
