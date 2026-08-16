@@ -125,11 +125,13 @@ jobs:
           echo "✅ Merged upstream pushed to main. CI will run automatically."
 
       - name: Setup Bun
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
         uses: ./.github/actions/setup-bun
 
       - name: Build
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        # Only build when signing certificate is configured; otherwise the
+        # code sync is sufficient and the release can be built manually.
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
         env:
           OPENCODE_CHANNEL: beta
           CSC_LINK: ${{ secrets.CSC_LINK }}
