@@ -1,0 +1,182 @@
+# ============================================================
+# Auto-sync from upstream (XiaomiMiMo/MiMo-Code)
+#
+# 定时检查上游新版本，自动合并到本 fork，触发 CI 验证，
+# 并在签名证书配置好后自动构建发布。
+#
+# 用法：
+#   - 每日自动运行（UTC 6:00 ≈ 北京时间 14:00）
+#   - 也可手动触发：GitHub → Actions → sync-upstream → Run workflow
+#
+# 前置条件（可选，用于自动构建发布）：
+#   1. 从钥匙串导出发者证书为 p12 文件
+#   2. 设置 GitHub Secrets：
+#      - CSC_LINK: base64 编码的 p12 证书文件内容
+#      - CSC_KEY_PASSWORD: p12 证书密码
+#   3. 若不设置，工作流仍会同步上游代码，但跳过构建发布
+# ============================================================
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 每天 UTC 6:00 (北京时间 14:00)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to sync (e.g. v0.1.12). Leave empty for latest.'
+        required: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/XiaomiMiMo/MiMo-Code.git
+          git fetch upstream --tags
+          git fetch upstream main
+
+      - name: Get upstream version
+        id: upstream
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(git tag -l "v*" --sort=-v:refname | head -1)
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Get current version
+        id: current
+        run: |
+          echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
+
+      - name: Compare versions
+        id: compare
+        run: |
+          UV="${{ steps.upstream.outputs.tag }}"
+          LV="v${{ steps.current.outputs.version }}"
+          echo "Upstream latest: $UV"
+          echo "Local latest:   $LV"
+          echo "upstream=$UV" >> $GITHUB_OUTPUT
+          echo "local=$LV" >> $GITHUB_OUTPUT
+          if [ "$UV" != "$LV" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Merge upstream
+        if: steps.compare.outputs.needs_update == 'true'
+        id: merge
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          git checkout main
+          if git merge --no-edit upstream/main 2>&1; then
+            echo "conflict=false" >> $GITHUB_OUTPUT
+          else
+            echo "conflict=true" >> $GITHUB_OUTPUT
+            echo "CONFLICT=true" >> $GITHUB_ENV
+            git merge --abort
+            echo "⚠️ Merge conflict detected. Aborted."
+          fi
+
+      - name: Create issue on conflict
+        if: env.CONFLICT == 'true'
+        uses: actions/github-script@v7
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '⚠️ 上游同步冲突需要手动处理',
+              body: `Auto-sync from upstream (XiaomiMiMo/MiMo-Code) has conflicts that need manual resolution.\n\nUpstream tag: ${process.env.UPSTREAM_TAG}\n\nPlease resolve the conflicts locally, then push to main.`
+            });
+
+      - name: Push merged code
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        run: |
+          # Push main (this triggers the test/lint/typecheck workflows)
+          git push origin main
+          echo "✅ Merged upstream pushed to main. CI will run automatically."
+
+      - name: Setup Bun
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        uses: ./.github/actions/setup-bun
+
+      - name: Build
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        env:
+          OPENCODE_CHANNEL: beta
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          cd packages/desktop
+          bun run build
+          if [ -n "$CSC_LINK" ]; then
+            # Full build with signing + notarization
+            bun run package:mac
+          else
+            # Directory-only build (ad-hoc signing, no notarization)
+            echo "⚠️ No CSC_LINK found — building with --dir (skip signing/notarization)"
+            bun run package:mac -- --dir
+          fi
+
+      - name: Get version for release
+        id: pkgver
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
+        run: echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v${{ steps.pkgver.outputs.version }}"
+          echo "Creating release: $VERSION"
+
+          # Collect artifacts
+          ARTIFACTS=""
+          for f in packages/desktop/dist/*.zip packages/desktop/dist/*.dmg; do
+            if [ -f "$f" ]; then
+              ARTIFACTS="$ARTIFACTS $f"
+            fi
+          done
+
+          if [ -z "$ARTIFACTS" ]; then
+            echo "No artifacts found, skipping release"
+            exit 0
+          fi
+
+          gh release create "$VERSION" $ARTIFACTS \
+            --title "MiMoCode Beta $VERSION" \
+            --notes "Auto-synced from upstream XiaomiMiMo/MiMo-Code.\n\nUpstream tag: ${{ steps.upstream.outputs.tag }}\nSync time: ${{ steps.upstream.outputs.date }}" \
+            --target main
+
+      - name: Summary
+        run: |
+          echo "## sync-upstream 结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.compare.outputs.needs_update }}" == "true" ]; then
+            echo "✅ 上游 ${{ steps.upstream.outputs.tag }} 已合并到 main" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.merge.outputs.conflict }}" == "true" ]; then
+              echo "❌ 合并冲突（已创建 Issue）" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "✅ 无冲突，已推送" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "✅ 当前已是最新版本（${{ steps.current.outputs.version }}），无需同步" >> $GITHUB_STEP_SUMMARY
+          fi
