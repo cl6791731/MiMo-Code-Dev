@@ -92,12 +92,12 @@ jobs:
           UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           git checkout main
-          if git merge --no-edit upstream/main 2>&1; then
+          if git merge --allow-unrelated-histories --no-edit upstream/main 2>&1; then
             echo "conflict=false" >> $GITHUB_OUTPUT
           else
             echo "conflict=true" >> $GITHUB_OUTPUT
             echo "CONFLICT=true" >> $GITHUB_ENV
-            git merge --abort
+            git merge --abort 2>/dev/null || true
             echo "⚠️ Merge conflict detected. Aborted."
           fi
 
