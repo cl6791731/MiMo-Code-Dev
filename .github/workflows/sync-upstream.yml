@@ -18,12 +18,14 @@
 name: sync-upstream
 
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron: '0 6 * * *'  # 每天 UTC 6:00 (北京时间 14:00)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to sync (e.g. v0.1.12). Leave empty for latest.'
+        required: false
+        type: string
 
 permissions:
   contents: write
