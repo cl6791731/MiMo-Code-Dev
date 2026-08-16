@@ -137,14 +137,10 @@ jobs:
           OPENCODE_CHANNEL: beta
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd packages/desktop
           bun run build
-          echo "=== File check ==="
-          ls out/main/index.js 2>&1 && echo "main:YES" || echo "main:NO"
-          ls out/main/chunks/opencode-server.js 2>&1 && echo "chunk:YES" || echo "chunk:NO"
-          find out -type f | head -20
-          echo "=== Running electron-builder ==="
           bun run package:mac 2>&1
 
       - name: Get version for release
