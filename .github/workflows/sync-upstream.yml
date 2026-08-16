@@ -127,11 +127,11 @@ jobs:
       - name: Setup Bun
         # Only build when signing certificate is configured; otherwise just
         # sync the code and let the user build manually.
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != '' }}
         uses: ./.github/actions/setup-bun
 
       - name: Build
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != '' }}
         env:
           OPENCODE_CHANNEL: beta
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -147,7 +147,7 @@ jobs:
         run: echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
