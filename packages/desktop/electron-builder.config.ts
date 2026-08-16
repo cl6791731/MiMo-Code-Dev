@@ -33,7 +33,6 @@ const getBase = (): Configuration => ({
     buildResources: "resources",
   },
   files: ["out/main/**", "out/preload/**", "out/renderer/**", "resources/**"],
-  main: "out/main/index.js",
   extraResources: [
     {
       from: "native/",
