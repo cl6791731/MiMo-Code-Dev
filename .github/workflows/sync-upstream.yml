@@ -43,15 +43,19 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/XiaomiMiMo/MiMo-Code.git
-          git fetch upstream --tags
-          git fetch upstream main
+          # Only fetch main branch — no tags, because our fork has its own
+          # tags (pointing to the rewritten history) that conflict with the
+          # upstream tags (would clobber existing tag).
+          git fetch upstream main --no-tags
 
       - name: Get upstream version
         id: upstream
         run: |
-          TAG="${{ inputs.tag }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(git tag -l "v*" --sort=-v:refname | head -1)
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            # Fetch the latest release tag from upstream without pulling tags.
+            TAG=$(gh release list -R XiaomiMiMo/MiMo-Code --json tagName --jq '.[0].tagName' 2>/dev/null)
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
