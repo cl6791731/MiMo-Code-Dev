@@ -98,6 +98,17 @@ jobs:
           # customizations rather than letting upstream overwrite them.
           if git merge --allow-unrelated-histories -X ours --no-edit upstream/main 2>&1; then
             echo "conflict=false" >> $GITHUB_OUTPUT
+            # Bump desktop version to the upstream tag so the built artifact
+            # and release carry the new version (e.g. v0.1.12 → 0.1.12),
+            # instead of keeping the fork's older version.
+            UPSTREAM_VER="${UPSTREAM_TAG#v}"
+            if [ -n "$UPSTREAM_VER" ]; then
+              cd packages/desktop
+              sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$UPSTREAM_VER\"/" package.json
+              cd ../..
+              git add packages/desktop/package.json
+              git commit -m "chore: bump desktop version to $UPSTREAM_VER" --no-edit 2>/dev/null || true
+            fi
           else
             echo "conflict=false" >> $GITHUB_OUTPUT
             git add .
