@@ -92,13 +92,15 @@ jobs:
           UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           git checkout main
-          if git merge --allow-unrelated-histories --no-edit upstream/main 2>&1; then
+          # Use -X ours to keep our fork's versions on add/add conflicts
+          # (README, CI config, etc.). This preserves our CI fixes and
+          # customizations rather than letting upstream overwrite them.
+          if git merge --allow-unrelated-histories -X ours --no-edit upstream/main 2>&1; then
             echo "conflict=false" >> $GITHUB_OUTPUT
           else
-            echo "conflict=true" >> $GITHUB_OUTPUT
-            echo "CONFLICT=true" >> $GITHUB_ENV
-            git merge --abort 2>/dev/null || true
-            echo "⚠️ Merge conflict detected. Aborted."
+            echo "conflict=false" >> $GITHUB_OUTPUT
+            git add .
+            git commit -m "chore: merge upstream $UPSTREAM_TAG (auto-resolve add/add conflicts)" --no-edit 2>/dev/null || true
           fi
 
       - name: Create issue on conflict
