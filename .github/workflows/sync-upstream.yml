@@ -125,13 +125,13 @@ jobs:
           echo "✅ Merged upstream pushed to main. CI will run automatically."
 
       - name: Setup Bun
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
+        # Only build when signing certificate is configured; otherwise just
+        # sync the code and let the user build manually.
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
         uses: ./.github/actions/setup-bun
 
       - name: Build
-        # Only build when signing certificate is configured; otherwise the
-        # code sync is sufficient and the release can be built manually.
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
         env:
           OPENCODE_CHANNEL: beta
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -139,14 +139,7 @@ jobs:
         run: |
           cd packages/desktop
           bun run build
-          if [ -n "$CSC_LINK" ]; then
-            # Full build with signing + notarization
-            bun run package:mac
-          else
-            # Directory-only build (ad-hoc signing, no notarization)
-            echo "⚠️ No CSC_LINK found — building with --dir (skip signing/notarization)"
-            bun run package:mac -- --dir
-          fi
+          bun run package:mac
 
       - name: Get version for release
         id: pkgver
@@ -154,7 +147,7 @@ jobs:
         run: echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.CSC_LINK != ''
+        if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && secrets.CSC_LINK != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
