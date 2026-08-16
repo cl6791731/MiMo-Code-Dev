@@ -18,6 +18,8 @@
 name: sync-upstream
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 6 * * *'  # 每天 UTC 6:00 (北京时间 14:00)
   workflow_dispatch:
