@@ -140,10 +140,10 @@ jobs:
         run: |
           cd packages/desktop
           bun run build
-          echo "=== Checking key files ==="
-          ls -la out/main/index.js 2>/dev/null && echo "main OK" || echo "main MISSING"
-          ls -la package.json 2>/dev/null && echo "package.json OK" || echo "package.json MISSING"
-          ls -la resources/ 2>/dev/null | head -3
+          echo "=== File check ==="
+          ls out/main/index.js 2>&1 && echo "main:YES" || echo "main:NO"
+          ls out/main/chunks/opencode-server.js 2>&1 && echo "chunk:YES" || echo "chunk:NO"
+          find out -type f | head -20
           echo "=== Running electron-builder ==="
           bun run package:mac 2>&1
 
