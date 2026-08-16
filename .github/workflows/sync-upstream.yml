@@ -128,14 +128,11 @@ jobs:
           echo "✅ Merged upstream pushed to main. CI will run automatically."
 
       - name: Setup Bun
-        # Only build when signing certificate is configured; otherwise just
-        # sync the code and let the user build manually.
-        if: false
-        # Temporarily disabled — packaging fails with masked-path error.
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.HAS_CSC == 'true' }}
         uses: ./.github/actions/setup-bun
 
       - name: Build
-        if: false
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.HAS_CSC == 'true' }}
         env:
           OPENCODE_CHANNEL: beta
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -143,7 +140,12 @@ jobs:
         run: |
           cd packages/desktop
           bun run build
-          bun run package:mac
+          echo "=== Checking key files ==="
+          ls -la out/main/index.js 2>/dev/null && echo "main OK" || echo "main MISSING"
+          ls -la package.json 2>/dev/null && echo "package.json OK" || echo "package.json MISSING"
+          ls -la resources/ 2>/dev/null | head -3
+          echo "=== Running electron-builder ==="
+          bun run package:mac 2>&1
 
       - name: Get version for release
         id: pkgver
