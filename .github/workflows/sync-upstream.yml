@@ -149,7 +149,7 @@ jobs:
         run: echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        if: false
+        if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.HAS_CSC == 'true' }}
         # Temporarily disabled — packaging step needs debugging.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
