@@ -156,6 +156,16 @@ jobs:
           VERSION="v${{ steps.pkgver.outputs.version }}"
           echo "Creating release: $VERSION"
 
+          # Remove any existing release/tag with the same name (re-run case)
+          if gh release view "$VERSION" -R cl6791731/MiMo-Code-Dev >/dev/null 2>&1; then
+            echo "Release $VERSION already exists, deleting it first"
+            gh release delete "$VERSION" -R cl6791731/MiMo-Code-Dev --cleanup-tag --yes
+          elif git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists without a release, deleting it"
+            git push origin ":refs/tags/$VERSION" 2>/dev/null || true
+            git tag -d "$VERSION" 2>/dev/null || true
+          fi
+
           # Collect artifacts
           ARTIFACTS=""
           for f in packages/desktop/dist/*.zip packages/desktop/dist/*.dmg; do
