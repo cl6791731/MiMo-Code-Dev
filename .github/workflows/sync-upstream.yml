@@ -71,7 +71,7 @@ jobs:
       - name: Get current version
         id: current
         run: |
-          echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
+          echo "version=$(grep '\"version\"' packages/desktop/package.json | sed 's/.*\"version\": \"\(.*\)\".*/\1/')" >> $GITHUB_OUTPUT
 
       - name: Compare versions
         id: compare
@@ -146,7 +146,7 @@ jobs:
       - name: Get version for release
         id: pkgver
         if: steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false'
-        run: echo "version=$(node -e 'console.log(require(\"./packages/desktop/package.json\").version)')" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '\"version\"' packages/desktop/package.json | sed 's/.*\"version\": \"\(.*\)\".*/\1/')" >> $GITHUB_OUTPUT
 
       - name: Create Release
         if: ${{ steps.compare.outputs.needs_update == 'true' && steps.merge.outputs.conflict == 'false' && env.HAS_CSC == 'true' }}
@@ -171,6 +171,7 @@ jobs:
           fi
 
           gh release create "$VERSION" $ARTIFACTS \
+            -R cl6791731/MiMo-Code-Dev \
             --title "MiMoCode Beta $VERSION" \
             --notes "Auto-synced from upstream XiaomiMiMo/MiMo-Code.\n\nUpstream tag: ${{ steps.upstream.outputs.tag }}\nSync time: ${{ steps.upstream.outputs.date }}" \
             --target main
