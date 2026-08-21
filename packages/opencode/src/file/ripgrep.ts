@@ -1,4 +1,5 @@
 import path from "path"
+import { childProcessEnv } from "@/util/child-process-env"
 import z from "zod"
 import { AppFileSystem } from "@mimo-ai/shared/filesystem"
 import { Cause, Context, Effect, Fiber, Layer, Queue, Stream } from "effect"
@@ -142,7 +143,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/Ripgrep") {}
 
 function env() {
-  const env = sanitizedProcessEnv()
+  const env = childProcessEnv()
   delete env.RIPGREP_CONFIG_PATH
   return env
 }

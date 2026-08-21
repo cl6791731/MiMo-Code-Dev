@@ -1,5 +1,4 @@
 import { app } from "electron"
-import { fileURLToPath } from "node:url"
 import { DEFAULT_SERVER_URL_KEY, WSL_ENABLED_KEY } from "./constants"
 import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
@@ -7,11 +6,6 @@ import { getStore } from "./store"
 export type WslConfig = { enabled: boolean }
 
 export type HealthCheck = { wait: Promise<void> }
-
-// Loads the bundled opencode server at runtime (externalized from the main
-// bundle to avoid esbuild failing on the 22MB single-file bundle).
-export const serverModule = () =>
-  import(/* @vite-ignore */ fileURLToPath(new URL("./chunks/opencode-server.js", import.meta.url)))
 
 export function getDefaultServerUrl(): string | null {
   const value = getStore().get(DEFAULT_SERVER_URL_KEY)
@@ -38,7 +32,7 @@ export function setWslConfig(config: WslConfig) {
 
 export async function spawnLocalServer(hostname: string, port: number, password: string) {
   prepareServerEnv(password)
-  const { Log, Server } = await serverModule()
+  const { Log, Server } = await import("virtual:opencode-server")
   await Log.init({ level: "WARN" })
   const listener = await Server.listen({
     port,

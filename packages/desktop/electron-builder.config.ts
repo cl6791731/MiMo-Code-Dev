@@ -27,12 +27,12 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: "mimocode-desktop-${os}-${arch}.${ext}",
+  artifactName: "opencode-desktop-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
     buildResources: "resources",
   },
-  files: ["out/main/**", "out/preload/**", "out/renderer/**", "resources/**"],
+  files: ["out/**/*", "resources/**/*"],
   extraResources: [
     {
       from: "native/",
@@ -54,8 +54,8 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "MiMoCode",
-    schemes: ["mimocode"],
+    name: "OpenCode",
+    schemes: ["opencode"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -84,29 +84,29 @@ function getConfig() {
     case "dev": {
       return {
         ...base,
-        appId: "ai.mimocode.desktop.dev",
-        productName: "MiMoCode Dev",
-        rpm: { packageName: "mimocode-dev" },
+        appId: "ai.opencode.desktop.dev",
+        productName: "OpenCode Dev",
+        rpm: { packageName: "opencode-dev" },
       }
     }
     case "beta": {
       return {
         ...base,
-        appId: "ai.mimocode.desktop.beta",
-        productName: "MiMoCode Beta",
-        protocols: { name: "MiMoCode Beta", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
-        rpm: { packageName: "mimocode-beta" },
+        appId: "ai.opencode.desktop.beta",
+        productName: "OpenCode Beta",
+        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
+        publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
+        rpm: { packageName: "opencode-beta" },
       }
     }
     case "prod": {
       return {
         ...base,
-        appId: "ai.mimocode.desktop",
-        productName: "MiMoCode",
-        protocols: { name: "MiMoCode", schemes: ["mimocode"] },
-        publish: { provider: "github", owner: "cl6791731", repo: "MiMo-Code-Dev", channel: "latest" },
-        rpm: { packageName: "mimocode" },
+        appId: "ai.opencode.desktop",
+        productName: "OpenCode",
+        protocols: { name: "OpenCode", schemes: ["opencode"] },
+        publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
+        rpm: { packageName: "opencode" },
       }
     }
   }

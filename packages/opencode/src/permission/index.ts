@@ -2,6 +2,7 @@ import { Bus } from "@/bus"
 import { BusEvent } from "@/bus/bus-event"
 import { ConfigPermission } from "@/config/permission"
 import { InstanceState } from "@/effect"
+import { Flag } from "@/flag/flag"
 import { ProjectID } from "@/project/schema"
 import { MessageID, SessionID } from "@/session/schema"
 import { PermissionTable } from "@/session/session.sql"
@@ -167,6 +168,10 @@ export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
   readonly skipAll: () => Effect.Effect<boolean>
   readonly setSkipAll: (enabled: boolean) => Effect.Effect<void>
+  readonly autoApproveDelete: () => Effect.Effect<boolean>
+  readonly setAutoApproveDelete: (enabled: boolean) => Effect.Effect<void>
+  readonly permissionAskTimeout: () => Effect.Effect<number | null>
+  readonly setPermissionAskTimeout: (ms: number | null) => Effect.Effect<void>
 }
 
 interface PendingEntry {
@@ -181,6 +186,25 @@ interface State {
   // instead. Explicit "deny" rules still win (they return before this check).
   // Runtime-only, instance-scoped: subagents in the same project inherit it.
   skipAll: boolean
+  // When true, the bash tool skips the extra bash_delete confirmation for
+  // irreversible deletes. Separate from skipAll because forced-ask permissions
+  // deliberately survive it (see FORCED_ASK) — trusting the model with deletes
+  // is its own, louder decision.
+  // Instance-scoped for the same reason every other approval state is: one
+  // server process serves many directories, each with independent permission
+  // state, so a process-global carrier (e.g. an env var) would let a permissive
+  // directory silently auto-approve deletes in a strict one.
+  // Defaults to the dedicated delete opt-out or dangerous startup mode so
+  // --yolo truly skips every non-denied approval; an embedder can override it
+  // per instance at runtime.
+  autoApproveDelete: boolean
+  // Timeout in ms for permission asks that require human confirmation.
+  // null = no timeout (wait indefinitely). When set, any ask (normal or
+  // forced-ask) that reaches the human-confirmation path auto-rejects after
+  // this duration. Orthogonal to skipAll: skipAll controls auto-allow for
+  // normal asks; this controls timeout for asks that still require a human.
+  // Initialized from MIMOCODE_SKIP_ALL_FORCED_ASK_TIMEOUT_MS for backward compat.
+  permissionAskTimeoutMs: number | null
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
@@ -192,8 +216,8 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Rules
 // pattern:"*", action:"allow"}` approval) MUST NOT be able to pre-authorize
 // these — the whole point of a forced-ask permission is that the intent to
 // perform an irreversible action must be recorded in-band, not inherited from
-// a broad blanket rule. Explicit deny still wins; the tool-side env opt-out
-// (e.g. MIMOCODE_AUTO_APPROVE_DELETE for bash_delete) is the only bypass.
+// a broad blanket rule. Explicit deny still wins; the tool-side delete exemption
+// (dedicated or enabled by dangerous startup mode) is the only bypass.
 const FORCED_ASK = new Set(["bash_delete"])
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -211,6 +235,8 @@ export const layer = Layer.effect(
           pending: new Map<PermissionID, PendingEntry>(),
           approved: row?.data ?? [],
           skipAll: false,
+          autoApproveDelete: Flag.MIMOCODE_AUTO_APPROVE_DELETE || Flag.MIMOCODE_DANGEROUSLY_SKIP_PERMISSIONS,
+          permissionAskTimeoutMs: envInitialAskTimeoutMs(),
         }
 
         yield* Effect.addFinalizer(() =>
@@ -262,6 +288,17 @@ export const layer = Layer.effect(
         if (ruleAction === "allow") continue
         if (evaluate(request.permission, pattern, approved).action === "allow") continue
         needsAsk = true
+      }
+
+      // Dangerous startup mode and the dedicated delete exemption may bypass
+      // the human confirmation, but only after every explicit bash_delete deny
+      // above has had a chance to reject the request.
+      if (needsAsk && forced && s.autoApproveDelete) {
+        log.info("auto-approve-delete active, auto-allowing", {
+          permission: request.permission,
+          patterns: request.patterns,
+        })
+        return
       }
 
       // Runtime skip-all: auto-allow anything that would block for approval.
@@ -595,7 +632,40 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ ask, reply, list, skipAll, setSkipAll })
+    const autoApproveDelete = Effect.fn("Permission.autoApproveDelete")(function* () {
+      return (yield* InstanceState.get(state)).autoApproveDelete
+    })
+
+    // No pending flush here, unlike setSkipAll: a bash_delete ask that is already
+    // waiting was raised while deletes still required a human, and the command it
+    // guards is irreversible. Enabling the exemption applies to later commands.
+    const setAutoApproveDelete = Effect.fn("Permission.setAutoApproveDelete")(function* (enabled: boolean) {
+      const s = yield* InstanceState.get(state)
+      s.autoApproveDelete = enabled
+      log.info("auto-approve-delete set", { enabled })
+    })
+
+    const permissionAskTimeout = Effect.fn("Permission.permissionAskTimeout")(function* () {
+      return (yield* InstanceState.get(state)).permissionAskTimeoutMs
+    })
+
+    const setPermissionAskTimeout = Effect.fn("Permission.setPermissionAskTimeout")(function* (ms: number | null) {
+      const s = yield* InstanceState.get(state)
+      s.permissionAskTimeoutMs = ms
+      log.info("permission ask timeout set", { ms })
+    })
+
+    return Service.of({
+      ask,
+      reply,
+      list,
+      skipAll,
+      setSkipAll,
+      autoApproveDelete,
+      setAutoApproveDelete,
+      permissionAskTimeout,
+      setPermissionAskTimeout,
+    })
   }),
 )
 

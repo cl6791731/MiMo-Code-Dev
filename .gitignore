@@ -1,28 +1,64 @@
-# 构建产物
-sst-env.d.ts
-*.d.ts
-node_modules/
-dist/
-.build/
-
-# IDE 配置
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# 运行时数据
-.reasonix/
-.codegraph/
-
-# 系统文件
 .DS_Store
-Thumbs.db
+node_modules
+.worktrees
+.sst
+.env
+.idea
+.vscode
+.codex
+*~
+playground
+tmp
+dist
+ts-dist
+*.tgz
+.turbo
+**/.serena
+.serena/
+/result
+refs
+Session.vim
+/opencode.json
+a.out
+target
+.scripts
+.direnv/
 
-# 日志文件
-*.log
+# Local dev files
+opencode-dev
+UPCOMING_CHANGELOG.md
 logs/
+*.bun-build
+tsconfig.tsbuildinfo
+.dev-home/
 
-# 临时文件
-*.tmp
-*.temp
+# Local agent harness state
+.claude/
+*.pid
+.mimo-worktrees
+.mimocde
+
+# experiment run artifacts (regenerated per run, not source)
+experiment/*.log
+experiment/last-outcome.json
+/experiment
+
+/mimoapi/
+/packages/opencode/src/ext
+
+# temp
+temp/
+__pycache__
+Thumbs.db
+.playwright-cli/
+.mimocode/wiki
+.mimocode/wikis
+.mimocode/cache
+
+# SDK codegen scratch: script/build.ts writes it, consumes it, then removes it.
+# A failed generation leaves it behind, where it is easy to commit by accident.
+/packages/sdk/js/openapi.json
+/packages/sdk/js/openapi-ts-error-*.log
+
+# others
+codex/

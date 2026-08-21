@@ -11,10 +11,11 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Type check
+      - name: Run typecheck
         run: bun typecheck

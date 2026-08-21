@@ -35,27 +35,16 @@ export default defineConfig({
         name: "opencode:virtual-server-module",
         enforce: "pre",
         resolveId(id) {
-          // Load the bundled opencode server at runtime instead of letting
-          // rollup bundle the 22MB single-file module (esbuild transform of
-          // the merged bundle fails with "Unterminated string literal").
-          if (id === "virtual:opencode-server") {
-            return { id: "opencode-server-runtime", external: true }
-          }
+          if (id === "virtual:opencode-server") return this.resolve(`${OPENCODE_SERVER_DIST}/node.js`)
         },
       },
       {
         name: "opencode:copy-server-assets",
         async writeBundle() {
-          await fs.mkdir("./out/main/chunks", { recursive: true })
           for (const l of await fs.readdir(OPENCODE_SERVER_DIST)) {
             if (!l.endsWith(".wasm")) continue
             await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${OPENCODE_SERVER_DIST}/${l}`))
           }
-          // Copy the bundled server to a runtime-loadable location
-          await fs.writeFile(
-            "./out/main/chunks/opencode-server.js",
-            await fs.readFile(`${OPENCODE_SERVER_DIST}/node.js`),
-          )
         },
       },
     ],

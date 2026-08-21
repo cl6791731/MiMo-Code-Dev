@@ -1,4 +1,5 @@
 import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
+import { childProcessEnv } from "@/util/child-process-env"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
@@ -584,8 +585,12 @@ export const layer = Layer.effect(
         command: cmd,
         args,
         cwd,
+        // childProcessEnv: MCP servers are third-party binaries running as the user.
+        // Note for `opencode` configured as its own MCP server: that nested engine no longer
+        // inherits the host's credentials or config content, and falls back to reading auth.json
+        // and the config file from disk — which is what a plain CLI invocation does anyway.
         env: {
-          ...process.env,
+          ...childProcessEnv(),
           ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },

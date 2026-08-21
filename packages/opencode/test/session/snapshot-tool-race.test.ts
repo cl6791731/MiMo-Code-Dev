@@ -214,10 +214,6 @@ const it = testEffect(makeHttp())
 
 const providerCfg = (url: string) => ({
   checkpoint: { thresholds: [] as string[] },
-  // Pin the default model so Provider.defaultModel does not pick
-  // mimo/mimo-auto (registered by the built-in mimo plugin) and hit the
-  // real MiMo API instead of the local TestLLMServer.
-  model: "test/test-model",
   provider: {
     test: {
       name: "Test",

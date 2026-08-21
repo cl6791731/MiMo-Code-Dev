@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { $ } from "bun"
 import os from "os"
 import path from "path"
@@ -14,7 +14,40 @@ function load<A>(dir: string, fn: (svc: Agent.Interface) => Effect.Effect<A>) {
   return Effect.runPromise(provideInstance(dir)(Agent.Service.use(fn)).pipe(Effect.provide(Agent.defaultLayer)))
 }
 
+const dynamicSystemPrompt = process.env.MIMOCODE_ENABLE_DYNAMIC_SYSTEM_PROMPT
+const codexMode = process.env.MIMOCODE_CODEX_MODE
+
+beforeEach(() => {
+  process.env.MIMOCODE_ENABLE_DYNAMIC_SYSTEM_PROMPT = "true"
+  delete process.env.MIMOCODE_CODEX_MODE
+})
+
+afterEach(() => {
+  if (dynamicSystemPrompt === undefined) delete process.env.MIMOCODE_ENABLE_DYNAMIC_SYSTEM_PROMPT
+  else process.env.MIMOCODE_ENABLE_DYNAMIC_SYSTEM_PROMPT = dynamicSystemPrompt
+  if (codexMode === undefined) delete process.env.MIMOCODE_CODEX_MODE
+  else process.env.MIMOCODE_CODEX_MODE = codexMode
+})
+
 describe("session.system", () => {
+  test("does not render dynamic environment information by default", async () => {
+    delete process.env.MIMOCODE_ENABLE_DYNAMIC_SYSTEM_PROMPT
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const prompt = await Effect.runPromise(
+          Effect.gen(function* () {
+            return yield* (yield* SystemPrompt.Service).environment(ProviderTest.model(), Date.now())
+          }).pipe(Effect.provide(SystemPrompt.defaultLayer)),
+        )
+
+        expect(prompt).toEqual([])
+      },
+    })
+  })
+
   test("Anthropic template does not contain machine-specific snapshots", () => {
     const prompt = SystemPrompt.provider(
       ProviderTest.model({
@@ -345,28 +378,4 @@ description: ${description}
     }
   })
 
-  test("does not prompt GPT or Claude models to use skill_search", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const build = await load(tmp.path, (svc) => svc.get("build"))
-        const prompts = await Effect.runPromise(
-          Effect.gen(function* () {
-            const system = yield* SystemPrompt.Service
-            return yield* Effect.all([
-              system.skills(build!, { id: "gpt-5.4" }),
-              system.skills(build!, { id: "claude-sonnet-4-6" }),
-              system.skills(build!, { id: "mimo-v2" }),
-            ])
-          }).pipe(Effect.provide(SystemPrompt.defaultLayer)),
-        )
-
-        expect(prompts[0]).not.toContain("skill_search")
-        expect(prompts[1]).not.toContain("skill_search")
-        expect(prompts[2]).toContain("skill_search")
-      },
-    })
-  })
 })

@@ -200,11 +200,6 @@ export const ref = {
 
 const cfg = {
   $schema: "https://mimo.xiaomi.com/mimocode/config.json",
-  // v0.1.11's Provider.defaultModel prefers mimo/mimo-auto whenever the mimo
-  // provider is registered (the built-in mimo plugin always registers it), which
-  // hijacks every test that relies on the `test` provider and sends requests to
-  // the real MiMo API. Pin the default model to the local TestLLMServer instead.
-  model: "test/test-model",
   provider: {
     test: {
       name: "Test",

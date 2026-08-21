@@ -8,8 +8,6 @@ import type { Event } from "electron"
 import { app, BrowserWindow, dialog } from "electron"
 import pkg from "electron-updater"
 
-import "./bun-polyfill"
-
 import contextMenu from "electron-context-menu"
 contextMenu({ showSaveImageAs: true, showLookUpSelection: false, showSearchWithGoogle: false })
 
@@ -21,17 +19,17 @@ try {
 process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
 const APP_NAMES: Record<string, string> = {
-  dev: "MiMoCode Dev",
-  beta: "MiMoCode Beta",
-  prod: "MiMoCode",
+  dev: "OpenCode Dev",
+  beta: "OpenCode Beta",
+  prod: "OpenCode",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.mimocode.desktop.dev",
-  beta: "ai.mimocode.desktop.beta",
-  prod: "ai.mimocode.desktop",
+  dev: "ai.opencode.desktop.dev",
+  beta: "ai.opencode.desktop.beta",
+  prod: "ai.opencode.desktop",
 }
-const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.mimocode.desktop.dev"
-app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "MiMoCode Dev")
+const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
+app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "OpenCode Dev")
 app.setAppUserModelId(appId)
 app.setPath("userData", join(app.getPath("appData"), appId))
 const { autoUpdater } = pkg
@@ -43,7 +41,7 @@ import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendSqliteMigratio
 import { initLogging } from "./logging"
 import { parseMarkdown } from "./markdown"
 import { createMenu } from "./menu"
-import { getDefaultServerUrl, getWslConfig, serverModule, setDefaultServerUrl, setWslConfig, spawnLocalServer } from "./server"
+import { getDefaultServerUrl, getWslConfig, setDefaultServerUrl, setWslConfig, spawnLocalServer } from "./server"
 import {
   createLoadingWindow,
   createMainWindow,
@@ -83,7 +81,7 @@ function setupApp() {
   }
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
-    const urls = argv.filter((arg: string) => arg.startsWith("mimocode://"))
+    const urls = argv.filter((arg: string) => arg.startsWith("opencode://"))
     if (urls.length) {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
@@ -113,7 +111,7 @@ function setupApp() {
   }
 
   void app.whenReady().then(async () => {
-    app.setAsDefaultProtocolClient("mimocode")
+    app.setAsDefaultProtocolClient("opencode")
     registerRendererProtocol()
     setDockIcon()
     setupAutoUpdater()
@@ -160,7 +158,7 @@ async function initialize() {
     })
 
     if (needsMigration) {
-      const { Database, JsonMigration } = await serverModule()
+      const { Database, JsonMigration } = await import("virtual:opencode-server")
       await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
         progress: (event: { current: number; total: number }) => {
           const percent = Math.round(event.current / event.total) * 100
@@ -205,20 +203,7 @@ async function initialize() {
     }
   }
 
-  // The sidecar (bundled opencode server) can take a while to import at
-  // runtime, and in rare cases the 22MB module load hangs. Never block the
-  // window on it indefinitely: wait with a generous timeout, then proceed so
-  // the UI always appears (the server keeps initializing in the background).
-  const loadResult = await Promise.race([
-    loadingTask.then(() => "ok" as const),
-    delay(60_000).then(() => "timeout" as const),
-  ]).catch((error) => {
-    logger.error("loading task failed", error)
-    return "error" as const
-  })
-  if (loadResult !== "ok") {
-    logger.warn("loading task did not complete cleanly", { result: loadResult })
-  }
+  await loadingTask
   setInitStep({ phase: "done" })
 
   if (overlay) {
