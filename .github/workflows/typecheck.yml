@@ -2,20 +2,19 @@ name: typecheck
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Run typecheck
+      - name: Type check
         run: bun typecheck
