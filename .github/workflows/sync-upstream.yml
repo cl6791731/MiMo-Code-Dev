@@ -108,7 +108,7 @@ jobs:
           # Bump desktop version to the upstream tag
           UPSTREAM_VER="${UPSTREAM_TAG#v}"
           if [ -n "$UPSTREAM_VER" ]; then
-            sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$UPSTREAM_VER\"" packages/desktop/package.json
+            sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$UPSTREAM_VER\"/" packages/desktop/package.json
             git add packages/desktop/package.json
           fi
           git add .
