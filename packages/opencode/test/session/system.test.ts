@@ -145,8 +145,42 @@ describe("session.system", () => {
 
     expect(prompt).toContain("Parallelize only tool calls that are independent")
     expect(prompt).toContain("keep dependencies sequential")
-    expect(prompt).toContain("only one small call is needed")
+    expect(prompt).toContain("including a single small call")
+    expect(prompt).toContain("tools.<name>(...)")
+    expect(prompt).toContain('tools.skill({ name: "<skill-name>" })')
+    expect(prompt).toContain("return result.output")
+    expect(prompt).toContain("never call an unavailable top-level `skill`")
     expect(prompt).not.toContain("When possible, prefer parallelization over sequential tool calls")
+  })
+
+  test("uses the GPT prompt for Codex models and the normal prompt for MiMo v2.5 models", () => {
+    const gpt = SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("gpt-5.4") }))[0]
+    const normal = SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("model-default") }))[0]
+    const prompts = ["mimo-v2.5", "mimo-v2.5-pro"].map(
+      (id) =>
+        SystemPrompt.provider(
+          ProviderTest.model({
+            id: ModelID.make(id),
+          }),
+        )[0],
+    )
+
+    expect(SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("gpt-5.4-codex") }))[0]).toBe(gpt)
+    expect(prompts).toEqual([normal, normal])
+    expect(SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("mimo-v2.6") }))[0]).toBe(gpt)
+  })
+
+  test("Codex mode forces the GPT prompt for non-GPT models", () => {
+    const gpt = SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("gpt-5.4") }))[0]
+    process.env.MIMOCODE_CODEX_MODE = "true"
+    const prompt = SystemPrompt.provider(
+      ProviderTest.model({
+        id: ModelID.make("claude-sonnet-4-6"),
+        providerID: ProviderID.make("anthropic"),
+      }),
+    )[0]
+
+    expect(prompt).toBe(gpt)
   })
 
   test("uses the same prompted subagent system across models", () => {
@@ -178,7 +212,7 @@ describe("session.system", () => {
       }),
     )[0]
 
-    expect(prompt).toContain("You are MiMoCode, an agent based on the GPT-5 family")
+    expect(prompt).toBe(SystemPrompt.provider(ProviderTest.model({ id: ModelID.make("gpt-5.4") }))[0])
   })
 
   test("does not inject vision capability guidance for GPT, Claude, or Gemini models", async () => {
@@ -222,7 +256,7 @@ describe("session.system", () => {
     })
   })
 
-  test("prompts the model to search skills from the first user query", async () => {
+  test("skill catalog does not include invocation reminders", async () => {
     await using tmp = await tmpdir({ git: true })
     const home = process.env.HOME
     const userProfile = process.env.USERPROFILE
@@ -240,13 +274,10 @@ describe("session.system", () => {
             }).pipe(Effect.provide(SystemPrompt.defaultLayer)),
           )
 
-          expect(prompt).toContain("first user query")
-          expect(prompt).toContain("might benefit from a specialized workflow")
-          expect(prompt).toContain("skill_search")
-          expect(prompt).toContain("action")
-          expect(prompt).toContain("input")
-          expect(prompt).toContain("output")
-          expect(prompt).toContain("audience")
+          expect(prompt).toContain("Skills available in this session:")
+          expect(prompt).not.toContain("first user query")
+          expect(prompt).not.toContain("skill_search")
+          expect(prompt).not.toContain("Use the skill tool")
         },
       })
     } finally {

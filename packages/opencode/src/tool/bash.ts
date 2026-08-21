@@ -475,7 +475,7 @@ export const BashTool = Tool.define(
     //     lifetime of the process, a `git config user.name ...` performed
     //     mid-session is NOT picked up until the process restarts.
     //   - Operator-set GIT_AUTHOR_*/GIT_COMMITTER_* still win: shellEnv only
-    //     fills the vars that are absent from process.env (see below).
+    //     fills the vars that are absent from the child environment baseline (see below).
     //
     // resolveGitIdentity and gitIdentityCache live in this outer setup block,
     // not inside shellEnv, precisely so the cache persists across every bash
@@ -577,6 +577,7 @@ export const BashTool = Tool.define(
         { env: {} },
       )
       const identity = yield* resolveGitIdentity()
+      const inherited = childProcessEnv()
       // Only fill vars the operator hasn't already set, so an explicit
       // GIT_AUTHOR_* in the environment still wins over our floor — and only
       // fields the repo itself resolved, so an unresolved field is left for git.
@@ -593,7 +594,7 @@ export const BashTool = Tool.define(
         ...(process.platform === "win32" ? { PYTHONIOENCODING: "utf-8" } : {}),
         // Git authorship floor. Placed after process.env so the spread order
         // reads naturally, but it can never clobber an operator value: gitFloor
-        // only ever holds keys that were absent from process.env. A plugin's
+        // only ever holds keys that were absent from the child baseline. A plugin's
         // extra.env comes last and so can still override the floor.
         ...gitFloor,
         ...extra.env,

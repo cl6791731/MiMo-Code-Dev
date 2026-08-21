@@ -8,7 +8,7 @@ import { Log, Token } from "../util"
 import { SessionRevert } from "./revert"
 import * as Session from "./session"
 import { Agent } from "../agent/agent"
-import { decideAskRouting, resolveInvalidOutputPolicy, SYSTEM_SPAWNED_AGENT_TYPES } from "@/agent/config"
+import { decideAskRouting, hasActorTool, resolveInvalidOutputPolicy, SYSTEM_SPAWNED_AGENT_TYPES } from "@/agent/config"
 import { renderActorNotification } from "@/inbox/render"
 import { parseReturnHeader } from "@/actor/return-header"
 import { Provider } from "../provider"
@@ -109,7 +109,6 @@ import { resolveInvocationStyle, type ToolStyleConfig } from "../tool/invocation
 import { ToolResultError } from "../tool/result-error"
 import { RecoverableError } from "../tool/recoverable"
 import { shouldAutoDream, shouldAutoDistill, DREAM_TASK, DISTILL_TASK, AUTO_DREAM_TITLE, AUTO_DISTILL_TITLE } from "./auto-dream"
-import { skillSearchReminderForSession } from "./skill-search-reminder"
 import {
   createMcpToolSearchCatalog,
   mcpToolCatalogBudget,
@@ -129,8 +128,9 @@ const SKILL_CATALOG_REMINDER_MARKER = "Skills available in this session:"
 // Recall-reminder hints, rendered in each tool's configured invocation style so
 // shell-mode sessions never see a JSON-shaped example (which primes models to
 // emit JSON and crash the shell parser). `memory` has no shell form, so it is
-// always JSON. Exported for unit testing.
-export function recallHintLines(toolCfg: ToolStyleConfig | undefined): string[] {
+// always JSON. `hasActor` false drops the actor line for an agent the tool is
+// masked out for. Exported for unit testing.
+export function recallHintLines(toolCfg: ToolStyleConfig | undefined, hasActor = true): string[] {
   const taskHint =
     resolveInvocationStyle(toolCfg, "task") === "shell" ? "- task list" : `- task({ operation: "list" })`
   const actorHint =
@@ -138,7 +138,7 @@ export function recallHintLines(toolCfg: ToolStyleConfig | undefined): string[] 
       ? "- actor status <actor_id>"
       : `- actor({ operation: "status", actor_id: "<id>" })`
   // memory has no shell form (no shell.parse) → always JSON.
-  return [`- memory({ operation: "search", query: "<keyword>" })`, taskHint, actorHint]
+  return [`- memory({ operation: "search", query: "<keyword>" })`, taskHint, ...(hasActor ? [actorHint] : [])]
 }
 
 // The orchestrator root session is PERSISTENT and coordinates many tasks over
@@ -885,7 +885,7 @@ export const layer = Layer.effect(
         ...input.agent,
         permission: Agent.runtimePermission(input.agent, input.session.permission),
       }
-      const skills = yield* sys.skills(runtimeAgent, input.model)
+      const skills = yield* sys.skills(runtimeAgent)
       const catalogText = skills
         ? ["<system-reminder>", SKILL_CATALOG_REMINDER_MARKER, skills, "</system-reminder>"].join("\n")
         : undefined
@@ -913,21 +913,6 @@ export const layer = Layer.effect(
           sessionID: userMessage.info.sessionID,
           type: "text",
           text: catalogText,
-          synthetic: true,
-        })
-        userMessage.parts.push(part)
-      }
-
-      // Search reminders apply only to eligible direct user sessions and models.
-      // They advise the primary agent when to search; the model still decides whether to call.
-      const reminder = skillSearchReminderForSession(input)
-      if (reminder) {
-        const part = yield* sessions.updatePart({
-          id: PartID.ascending(),
-          messageID: userMessage.info.id,
-          sessionID: userMessage.info.sessionID,
-          type: "text",
-          text: reminder,
           synthetic: true,
         })
         userMessage.parts.push(part)
@@ -1037,7 +1022,7 @@ ${entries}
                 ? `SKILL.md for [${toLoad.join(", ")}] has been auto-loaded above.`
                 : ""
               const overflowHint = overflow.length > 0
-                ? `For [${overflow.join(", ")}], use the Skill tool to load them on demand.`
+                ? `SKILL.md for [${overflow.join(", ")}] was not auto-loaded; load each through the current skill tool surface before using it.`
                 : ""
               const part = yield* sessions.updatePart({
                 id: PartID.ascending(),
@@ -1213,6 +1198,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const tools: Record<string, AITool> = {}
       const activeTools = new Set<string>()
       const loadedMcpTools = new Set<string>()
+      const execMcpTools: Record<string, AITool> = {}
       const mcpSearchEntries: McpToolSearchEntry[] = []
       const mcpCatalog = { current: createMcpToolSearchCatalog([]) }
       // exec's request-scoped MCP view. Holder object (same pattern as
@@ -1242,6 +1228,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return new Set(actor.tools)
       })
       const whitelist = yield* whitelistFor()
+      const useGPTTools = usesGPTToolset(input.model.id)
+      const execAllowedByWhitelist =
+        useGPTTools &&
+        !!whitelist &&
+        [...whitelist].some((toolID) => !GPT_TOP_LEVEL_TOOLS.has(toolID))
       // Whether a permission ask must be non-interactive (fail clean, never hang):
       // true for system-spawned actors (checkpoint-writer/dream/distill) AND any
       // background actor such as compose workflow subagents (spawned as "general"
@@ -1331,7 +1322,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             .pipe(Effect.orDie),
       })
 
-      for (const item of yield* registry.tools({
+      // Keep every authorized definition in the AI SDK tool map so an unadvertised
+      // direct call still resolves. `activeTools` below is the separate provider-
+      // facing schema allowlist and stays compact in Codex mode.
+      for (const item of yield* registry.registered({
         modelID: input.model.id,
         providerID: input.model.providerID,
         agent: input.agent,
@@ -1351,7 +1345,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   sessionID: input.session.id,
                 })
                 const ctx = context(args, options)
-                if (whitelist && !whitelist.has(item.id) && item.id !== MCP_TOOL_SEARCH_ID) {
+                if (
+                  whitelist &&
+                  !whitelist.has(item.id) &&
+                  item.id !== MCP_TOOL_SEARCH_ID &&
+                  !(item.id === "exec" && execAllowedByWhitelist)
+                ) {
                   const output = rejectionFor(item.id)
                   log.debug("tool execute rejected", {
                     tool: item.id,
@@ -1432,7 +1431,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             )
           },
         })
-        if (item.id !== MCP_TOOL_SEARCH_ID) activeTools.add(item.id)
+        if (item.id !== MCP_TOOL_SEARCH_ID && (!useGPTTools || GPT_TOP_LEVEL_TOOLS.has(item.id))) {
+          activeTools.add(item.id)
+        }
       }
 
       const localToolNames = new Set(Object.keys(tools))
@@ -1466,8 +1467,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             parameters: transformed as unknown as JSONObject,
           })
         }
-        if (searchable && !useMcpToolSearch && input.model.capabilities.toolcall) activeTools.add(key)
-        item.execute = (args, opts) =>
+        if (searchable && !useMcpToolSearch && input.model.capabilities.toolcall && !useGPTTools) {
+          activeTools.add(key)
+        }
+        const executeMcp = (
+          args: Parameters<typeof execute>[0],
+          opts: Parameters<typeof execute>[1],
+          requireLoaded: boolean,
+        ) =>
           run.promise(
             Effect.gen(function* () {
               const startTs = Date.now()
@@ -1483,7 +1490,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   new RecoverableError(`The MCP tool "${key}" is unavailable for this request.`),
                 )
               }
-              if (useMcpToolSearch && !loadedMcpTools.has(key)) {
+              if (requireLoaded && useMcpToolSearch && !loadedMcpTools.has(key)) {
                 return yield* Effect.fail(
                   new RecoverableError(
                     `The MCP tool "${key}" is not loaded for this request. Call ${MCP_TOOL_SEARCH_ID} first, then retry on the next step.`,
@@ -1601,7 +1608,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               return output
             }),
           )
+        item.execute = (args, opts) => executeMcp(args, opts, true)
         tools[key] = item
+        if (searchable && input.model.capabilities.toolcall) {
+          execMcpTools[key] = {
+            ...item,
+            execute: (args, opts) => executeMcp(args, opts, false),
+          }
+        }
       }
       mcpCatalog.current = createMcpToolSearchCatalog(
         mcpSearchEntries.toSorted((a, b) => a.name.localeCompare(b.name)),
@@ -1658,6 +1672,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }
 
       if (
+        !useGPTTools &&
         useMcpToolSearch &&
         input.model.capabilities.toolcall &&
         mcpCatalog.current.entries.length > 0 &&
@@ -1665,17 +1680,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       ) {
         activeTools.add(MCP_TOOL_SEARCH_ID)
       }
-      loadedMcpTools.forEach((name) => activeTools.add(name))
+      if (!useGPTTools) loadedMcpTools.forEach((name) => activeTools.add(name))
 
-      // Fill exec's request-scoped MCP view (holder declared at the top of
-      // this pass, delivered via ctx.extra.execMcp): exactly the MCP tools
-      // active for this request. Under mcp_tool_search gating that means only
-      // search-loaded tools — exec must not bypass the discovery gate.
-      for (const [key] of mcpTools) {
-        if (!tools[key] || !activeTools.has(key)) continue
-        if (key === MCP_TOOL_SEARCH_ID) continue
-        execMcp.current[key] = tools[key]
-      }
+      // MCP Tool Search keeps full schemas out of the outer model tool list;
+      // it is a context-budget optimization, not an authorization boundary.
+      // exec therefore receives every request-authorized MCP tool so Codex can
+      // call a catalogued tool in the same step without a redundant search
+      // round-trip. These wrappers still run the ordinary permission, plugin,
+      // metrics, normalization, and truncation pipeline above.
+      execMcp.current = execMcpTools
 
       return {
         tools,
@@ -3304,7 +3317,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               .pipe(Effect.catch(() => Effect.succeed(false)))
             if (hasRecallTarget) {
               const sessMemDir = path.join(Global.Path.data, "memory", "sessions", sessionID)
-              const hints = recallHintLines((yield* config.get()).tool)
+              const hints = recallHintLines(
+                (yield* config.get()).tool,
+                hasActorTool(yield* agents.get(lastUser.agent)),
+              )
               lastUserMsgForRecall.parts.push({
                 id: PartID.ascending(),
                 messageID: lastUserMsgForRecall.info.id,
@@ -3317,8 +3333,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   "not in your context with:",
                   hints[0],
                   `- Read(file_path="${sessMemDir}/...")`,
-                  hints[1],
-                  hints[2],
+                  ...hints.slice(1),
                   "",
                   "Don't ask the user about something memory may already record.",
                   "</system-reminder>",

@@ -16,21 +16,20 @@ export const toolScriptRegistry: {
     | undefined
 } = { current: undefined }
 
-// Agent control-flow tools make no sense inside a script (they steer the
-// conversation, not data) — excluded from both the declared API and dispatch.
+// Codex keeps one compact advertised surface while the runtime still registers
+// every authorized tool for compatibility with direct calls emitted by the
+// model. `wait` is reserved for the standalone tool once it is available.
+export const GPT_TOP_LEVEL_TOOLS = new Set(["exec", "wait"])
+
+// Recursive orchestration and internal sentinel tools stay outside scripts.
+// Other control-flow tools are intentionally callable through `tools.<id>` so
+// the GPT/Codex toolset can expose a single outer `exec` surface.
 export const TOOL_SCRIPT_EXCLUDED = new Set([
   "exec",
   "mcp_tool_search",
   "invalid",
-  "question",
-  "task",
-  "actor",
-  "skill",
-  "plan_exit",
-  "cron",
   "session",
   "workflow",
-  "change_directory",
 ])
 
 // Reserved aliases share the target definition and therefore its permission,
