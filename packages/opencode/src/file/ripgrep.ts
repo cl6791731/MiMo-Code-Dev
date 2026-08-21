@@ -10,7 +10,6 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
 import { Global } from "@/global"
 import { Log } from "@/util"
-import { sanitizedProcessEnv } from "@/util/mimo-process"
 import { which } from "@/util/which"
 
 const log = Log.create({ service: "ripgrep" })
@@ -342,7 +341,6 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | ChildPro
         return ChildProcess.make(binary, args, {
           cwd,
           env: env(),
-          extendEnv: true,
           stdin: "ignore",
         })
       })

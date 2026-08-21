@@ -2,6 +2,7 @@ import z from "zod"
 import os from "os"
 import fs from "fs"
 import path from "path"
+import ts from "typescript"
 import { Effect } from "effect"
 import type { Tool as AiTool } from "ai"
 import { EffectBridge, InstanceState } from "@/effect"
@@ -19,14 +20,42 @@ const log = Log.create({ service: "tool.exec" })
 const MAX_TOOL_CALLS_DEFAULT = 50
 const MAX_TOOL_CALLS_CEILING = 500
 const MAX_CONCURRENT = 8
-const ACTIVE_DEADLINE_S_DEFAULT = 60
-const ACTIVE_DEADLINE_S_CEILING = 600
+const ACTIVE_DEADLINE_MS_DEFAULT = 60_000
+const ACTIVE_DEADLINE_MS_CEILING = 600_000
 const WALL_DEADLINE_MS = 30 * 60 * 1000
 const MAX_RESULT_BYTES = 256 * 1024
 const MAX_LOG_BYTES = 64 * 1024
 const MAX_CODE_BYTES = 128 * 1024
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 const TRACE_TAIL_ENTRIES = 20
+const EXEC_COMMAND_DEFAULT_YIELD_TIME_MS = 10_000
+
+const ExecCommandParameters = z.object({
+  cmd: z.string().describe("Shell command to execute."),
+  yield_time_ms: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(`Wait budget in milliseconds before the command is terminated. Defaults to ${EXEC_COMMAND_DEFAULT_YIELD_TIME_MS} ms.`),
+  workdir: z
+    .string()
+    .optional()
+    .describe("Working directory for the command. Defaults to the current session directory."),
+})
+
+const EXEC_COMMAND_DESCRIPTION =
+  "Runs a shell command through the permission-gated bash executor. `cmd` is required; `yield_time_ms` is optional and defaults to 10000 ms."
+
+function execCommandArgs(args: unknown) {
+  const input = ExecCommandParameters.parse(args)
+  return {
+    command: input.cmd,
+    timeout: input.yield_time_ms ?? EXEC_COMMAND_DEFAULT_YIELD_TIME_MS,
+    workdir: input.workdir,
+    description: input.cmd.length > 80 ? `${input.cmd.slice(0, 77)}...` : input.cmd,
+  }
+}
 
 /** JSON Schema (zod v4 toJSONSchema output) → compact TS type text. Best-effort:
  * anything unrecognized renders as `unknown`, which is safe for declarations. */
@@ -68,8 +97,11 @@ function schemaToTs(schema: any): string {
 /** Render the `tools` API declaration block appended to the tool description. */
 export function renderToolScriptDeclarations(defs: Tool.Def[]): string {
   const aliases = new Set(Object.keys(TOOL_SCRIPT_ALIASES))
+  const aliasTargets = new Set<string>(Object.values(TOOL_SCRIPT_ALIASES))
   const lines = defs
-    .filter((def) => !TOOL_SCRIPT_EXCLUDED.has(def.id) && !aliases.has(def.id))
+    .filter(
+      (def) => !TOOL_SCRIPT_EXCLUDED.has(def.id) && !aliases.has(def.id) && !aliasTargets.has(def.id),
+    )
     .map((def) => {
       const summary = def.description.split("\n").find((l) => l.trim()) ?? ""
       const input = schemaToTs(z.toJSONSchema(def.parameters))
@@ -78,8 +110,10 @@ export function renderToolScriptDeclarations(defs: Tool.Def[]): string {
   const aliasLines = Object.entries(TOOL_SCRIPT_ALIASES).flatMap(([alias, target]) => {
     const def = defs.find((item) => item.id === target)
     if (!def) return []
-    const summary = def.description.split("\n").find((line) => line.trim()) ?? ""
-    const input = schemaToTs(z.toJSONSchema(def.parameters))
+    const summary = alias === "exec_command"
+      ? EXEC_COMMAND_DESCRIPTION
+      : def.description.split("\n").find((line) => line.trim()) ?? ""
+    const input = schemaToTs(z.toJSONSchema(alias === "exec_command" ? ExecCommandParameters : def.parameters))
     return [`  /** Alias for ${target}. ${summary.trim().slice(0, 180)} */\n  ${alias}(input: ${input}): Promise<ToolResult>`]
   })
   return [
@@ -88,14 +122,16 @@ export function renderToolScriptDeclarations(defs: Tool.Def[]): string {
     "declare const tools: {",
     ...lines,
     ...aliasLines,
-    "  /** Active MCP tools (if any) are also callable as tools.<name>(input). MCP results carry parsed structuredContent in `structured` when the server provides it. */",
+    "  /** Request-authorized MCP tools are callable by their exact ALL_TOOLS catalog name. */",
     "  [mcpToolName: string]: (input: Record<string, unknown>) => Promise<ToolResult>",
     "}",
+    "/** Every tool callable in this execution. Search names and descriptions to discover tools without mcp_tool_search. */",
+    "declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string }>",
     "// Raw file IO for machine-to-machine data (pipelines across executions).",
     "declare const files: {",
     "  /** Raw file contents — no line numbers, no truncation. null if missing. Paths: worktree or OS tmp. */",
     "  readText(path: string): Promise<string | null>",
-    "  /** Write raw text; parent dirs auto-created. OS tmp dir ONLY — project writes go through tools.write/edit. */",
+    "  /** Write raw text; parent dirs auto-created. OS tmp dir ONLY — project writes go through tools.apply_patch. */",
     "  writeText(path: string, content: string): Promise<void>",
     "}",
     "```",
@@ -241,7 +277,7 @@ const files = {
 `
 
 /** Jail for the `files` raw-IO primitives. Read: worktree + OS tmp. Write: OS
- * tmp ONLY — project writes must go through tools.write/edit so Permission.ask
+ * tmp ONLY — project writes must go through tools.apply_patch so Permission.ask
  * applies (enforced here, not just advised in the prompt). Containment is
  * checked on REALPATHS: macOS /tmp and /var are symlinks into /private, so a
  * lexical check rejects the literal "/tmp/x" even though it lives inside the
@@ -268,7 +304,7 @@ function resolveJailed(roots: string[], p: string, kind: "read" | "write"): stri
   if (canonRoots.some((root) => abs === root || Filesystem.contains(root, abs))) return abs
   throw new Error(
     kind === "write"
-      ? `files.writeText is limited to the OS temp dir — write project files via tools.write/tools.edit: ${JSON.stringify(p)}`
+      ? `files.writeText is limited to the OS temp dir — write project files via tools.apply_patch: ${JSON.stringify(p)}`
       : `path outside allowed roots (worktree, tmp): ${JSON.stringify(p)}`,
   )
 }
@@ -306,7 +342,7 @@ export const ToolScriptTool = Tool.define(
         code: z
           .string()
           .describe(
-            "TypeScript (or JavaScript) source for the body of an async function. Call tools via the global `tools` object; `return` the final aggregated value.",
+            "Raw JavaScript or TypeScript source for the body of an async function, not JSON or a Markdown code block. Call tools via the global `tools` object; inspect `ALL_TOOLS` when needed; `return` the final aggregated value.",
           ),
         max_tool_calls: z
           .number()
@@ -317,20 +353,20 @@ export const ToolScriptTool = Tool.define(
           .describe(
             `Tool call budget for this execution (default ${MAX_TOOL_CALLS_DEFAULT}, max ${MAX_TOOL_CALLS_CEILING}). Raise it only when the work genuinely needs more calls.`,
           ),
-        timeout_seconds: z
+        timeout: z
           .number()
           .int()
           .min(1)
-          .max(ACTIVE_DEADLINE_S_CEILING)
+          .max(ACTIVE_DEADLINE_MS_CEILING)
           .optional()
           .describe(
-            `Compute-time budget in seconds (default ${ACTIVE_DEADLINE_S_DEFAULT}, max ${ACTIVE_DEADLINE_S_CEILING}). Counts only active script compute — time parked on tool calls is not charged.`,
+            `Compute-time budget in milliseconds (default ${ACTIVE_DEADLINE_MS_DEFAULT}, max ${ACTIVE_DEADLINE_MS_CEILING}). Counts only active script compute — time parked on tool calls is not charged.`,
           ),
       }),
-      execute: (params: { code: string; max_tool_calls?: number; timeout_seconds?: number }, ctx: Tool.Context) =>
+      execute: (params: { code: string; max_tool_calls?: number; timeout?: number }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const maxToolCalls = params.max_tool_calls ?? MAX_TOOL_CALLS_DEFAULT
-          const activeDeadlineMs = (params.timeout_seconds ?? ACTIVE_DEADLINE_S_DEFAULT) * 1000
+          const activeDeadlineMs = params.timeout ?? ACTIVE_DEADLINE_MS_DEFAULT
           const trace: TraceEntry[] = []
           // completeToolCall REPLACES part metadata with execute()'s return value,
           // so every terminal return re-publishes these counts — otherwise the
@@ -378,16 +414,30 @@ export const ToolScriptTool = Tool.define(
             )
           ).filter((def) => !TOOL_SCRIPT_EXCLUDED.has(def.id) && (!whitelist || whitelist.has(def.id)))
           const byId = new Map(defs.map((def) => [def.id, def]))
-          // MCP tools (request-scoped view delivered via ctx.extra.execMcp,
-          // filled by SessionPrompt's resolveTools for THIS request — under
-          // mcp_tool_search gating only search-loaded tools appear, so exec
-          // cannot bypass the discovery gate; a module-level ref would be
-          // overwritten by concurrent sessions). Builtin ids win on collision
-          // — an MCP server must not shadow `read`/`grep`.
+          // Request-authorized MCP tools (delivered via ctx.extra.execMcp and
+          // filled by SessionPrompt's resolveTools for THIS request). Tool Search
+          // only limits the outer model's schema list; exec receives the full
+          // authorized view so it can call tools[exactCatalogName](...) directly.
+          // A module-level ref would be overwritten by concurrent sessions.
+          // Builtin ids win on collision — an MCP server must not shadow `read`.
           const mcpTools = (ctx.extra?.execMcp as { current?: Record<string, AiTool> } | undefined)?.current ?? {}
           const mcpById = new Map(
             Object.entries(mcpTools).filter(([id]) => !byId.has(id) && (!whitelist || whitelist.has(id))),
           )
+          const allTools = [
+            ...[...byId.values()]
+              .filter((def) => !Object.values(TOOL_SCRIPT_ALIASES).some((target) => target === def.id))
+              .map((def) => ({ name: def.id, description: def.description })),
+            ...Object.entries(TOOL_SCRIPT_ALIASES).flatMap(([name, target]) => {
+              const def = byId.get(target)
+              if (!def) return []
+              return [{
+                name,
+                description: name === "exec_command" ? EXEC_COMMAND_DESCRIPTION : `Alias for ${target}. ${def.description}`,
+              }]
+            }),
+            ...[...mcpById.entries()].map(([name, tool]) => ({ name, description: tool.description ?? "" })),
+          ]
           // Non-git projects report worktree === "/" (see Instance.containsPath) —
           // "/" as a jail root would allow EVERYTHING. Fall back to the project
           // directory in that case. Relative guest paths resolve against roots[0].
@@ -403,38 +453,44 @@ export const ToolScriptTool = Tool.define(
           const bridge = yield* EffectBridge.make()
 
           // Wrap before transpiling: the code is the BODY of an async function
-          // (top-level `return`/`await`), which is invalid at module top level —
-          // Bun.Transpiler would reject it. The wrapped form transpiles to a plain
-          // JS async-arrow expression the guest body can invoke.
-          // Bun surfaces syntax errors as BuildMessage (single) or AggregateError
-          // (several), each carrying a position. Report line/column relative to
-          // the CALLER's code (the wrapper adds one line above), plus the source
-          // line text — a bare "Parse error" is undebuggable in a 100-line script.
-          const formatBuildError = (err: unknown): string => {
-            const messages = err instanceof AggregateError ? err.errors : [err]
-            const rendered = messages
-              .map((m: any) => {
-                const pos = m?.position
-                if (!pos || typeof pos.line !== "number") return String(m?.message ?? m)
-                return `line ${pos.line - 1}, column ${pos.column}: ${m.message}\n  ${pos.lineText ?? ""}`
+          // (top-level `return`/`await`), which is invalid at module top level.
+          // The wrapped form transpiles to a plain JS async-arrow expression the
+          // guest body can invoke. Use TypeScript rather than Bun.Transpiler: this
+          // core module also ships in the Node bundle, and some standalone Bun
+          // runtimes expose Transpiler without a constructible implementation.
+          // Report line/column relative to the CALLER's code (the wrapper adds one
+          // line above), plus source text — a bare parse error is undebuggable.
+          const source = `globalThis.__main = async () => {\n${params.code}\n}`
+          const result = ts.transpileModule(source, {
+            reportDiagnostics: true,
+            compilerOptions: {
+              module: ts.ModuleKind.ESNext,
+              target: ts.ScriptTarget.ESNext,
+            },
+          })
+          const hasImport = /^\s*(import|export)\s/m.test(params.code)
+          const formatDiagnostics = (diagnostics: readonly ts.Diagnostic[]): string => {
+            const rendered = diagnostics
+              .map((diagnostic) => {
+                if (!diagnostic.file || diagnostic.start === undefined)
+                  return ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+                const pos = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
+                return `line ${pos.line}, column ${pos.character + 1}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}\n  ${diagnostic.file.text.split("\n")[pos.line] ?? ""}`
               })
               .join("\n")
-            const importHint = /^\s*(import|export)\s/m.test(params.code)
+            const importHint = hasImport
               ? "\nnote: import/export are NOT supported — the code runs as a sandboxed function body. Use the provided `tools` / `files` globals instead of Node modules."
               : ""
-            return `TypeScript transpile failed:\n${rendered}${importHint}`
+            return `TypeScript transpile failed:\n${rendered || "import/export declaration is not supported"}${importHint}`
           }
-          const transpiled = yield* Effect.try({
-            try: () => new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__main = async () => {\n${params.code}\n}`),
-            catch: (err) => err,
-          }).pipe(Effect.catch((err) => Effect.succeed({ error: formatBuildError(err) })))
-          if (typeof transpiled === "object") {
+          if (result.diagnostics?.length || hasImport) {
             return {
               title: "transpile error",
               metadata: { status: "code_error", toolCalls: 0, counts: tally(), recent: recentTail() },
-              output: `<exec status="code_error">\n<error_message>\n${transpiled.error}\n</error_message>\n</exec>`,
+              output: `<exec status="code_error">\n<error_message>\n${formatDiagnostics(result.diagnostics ?? [])}\n</error_message>\n</exec>`,
             }
           }
+          const transpiled = result.outputText
 
           const logs: string[] = []
           let logBytes = 0
@@ -463,6 +519,7 @@ export const ToolScriptTool = Tool.define(
             const def = byId.get(alias ?? id)
             const mcpDef = def ? undefined : mcpById.get(id)
             if (!def && !mcpDef) return Promise.reject(new Error(`unknown tool: ${id}`))
+            const toolArgs = id === "exec_command" ? execCommandArgs(args) : args
             calls++
             if (calls > maxToolCalls)
               return Promise.reject(new Error(`tool call budget exceeded (${maxToolCalls} per execution)`))
@@ -487,7 +544,7 @@ export const ToolScriptTool = Tool.define(
               Effect.tryPromise({
                 try: () =>
                   Promise.resolve(
-                    tool.execute!(args ?? {}, {
+                    tool.execute!(toolArgs ?? {}, {
                       toolCallId: subCtx.callID,
                       messages: [],
                       abortSignal: ctx.abort,
@@ -515,7 +572,7 @@ export const ToolScriptTool = Tool.define(
               )
             return withSlot(() =>
               bridge
-                .promise(def ? def.execute(args, subCtx) : executeMcp(mcpDef!))
+                .promise(def ? def.execute(toolArgs, subCtx) : executeMcp(mcpDef!))
                 .then(
                   (result) => {
                     trace.push({ name: id, status: "success", durationMs: Date.now() - start })
@@ -549,7 +606,7 @@ export const ToolScriptTool = Tool.define(
           // Raw file IO (`files.*`): machine-to-machine data channel, bypassing the
           // agent-facing read/write formatting (line numbers, truncation). Reads are
           // jailed to worktree + OS tmp; writes to OS tmp ONLY (project writes must
-          // carry permissions → tools.write/edit). Read side also caps size so a
+          // carry permissions → tools.apply_patch). Read side also caps size so a
           // giant file can't blow the guest memory limit.
           const readText: HostFn = async (p: unknown) => {
             const abs = resolveJailed(jailRoots, String(p), "read")
@@ -586,7 +643,8 @@ export const ToolScriptTool = Tool.define(
               // and lossy conversions (NaN→null, Map→array, Error→plain object) are
               // reported as warnings. The envelope crosses the boundary as plain JSON.
               evalScript(
-                GUEST_PRELUDE +
+                `const ALL_TOOLS = Object.freeze(${JSON.stringify(allTools)}.map(Object.freeze));\n` +
+                  GUEST_PRELUDE +
                   "\n" +
                   transpiled +
                   `\nconst __ret = await globalThis.__main();
@@ -625,7 +683,7 @@ return { __undef: __out.value === undefined, json: __out.value === undefined ? "
             // reads like an engine fault — explain which budget was exhausted.
             const explained =
               status === "timeout"
-                ? `execution exceeded its time budget (${activeDeadlineMs / 1000}s of active compute, ${WALL_DEADLINE_MS / 60000}min wall clock — time parked on tool calls is not charged against the compute budget; raise via timeout_seconds, max ${ACTIVE_DEADLINE_S_CEILING}). Original error: ${message}`
+                ? `execution exceeded its time budget (${activeDeadlineMs}ms of active compute, ${WALL_DEADLINE_MS / 60000}min wall clock — time parked on tool calls is not charged against the compute budget; raise via timeout, max ${ACTIVE_DEADLINE_MS_CEILING}ms). Original error: ${message}`
                 : message
             log.warn("exec failed", { status, message: explained.slice(0, 500) })
             return {

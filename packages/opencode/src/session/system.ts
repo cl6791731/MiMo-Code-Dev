@@ -13,7 +13,6 @@ import PROMPT_GEMINI from "./prompt/gemini.txt"
 import PROMPT_GPT from "./prompt/gpt.txt"
 import PROMPT_KIMI from "./prompt/kimi.txt"
 
-import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_DEEPSEEK from "./prompt/deepseek.txt"
 import PROMPT_GLM from "./prompt/glm.txt"
 import PROMPT_MINIMAX from "./prompt/minimax.txt"
@@ -33,9 +32,11 @@ function renderGitResult(result: Git.Result, fallback = "(none)") {
 const anthropicEnvironment = new Map<string, string>()
 
 export function provider(model: Provider.Model) {
+  if (Flag.MIMOCODE_CODEX_MODE) return [PROMPT_GPT]
   const prompt = (id: string) => {
+    if (usesMimoCodexMode(id)) return PROMPT_GPT
     if (id.includes("gpt-4") || id.includes("o1") || id.includes("o3")) return PROMPT_BEAST
-    if (id.includes("gpt")) return id.includes("codex") ? PROMPT_CODEX : PROMPT_GPT
+    if (id.includes("gpt")) return PROMPT_GPT
     if (id.includes("gemini-")) return PROMPT_GEMINI
     if (id.includes("claude")) return PROMPT_ANTHROPIC
     if (id.toLowerCase().includes("trinity")) return PROMPT_TRINITY
@@ -53,7 +54,7 @@ export function agent(agent: Agent.Info, model: Provider.Model) {
 
 export interface Interface {
   readonly environment: (model: Provider.Model, now: number) => Effect.Effect<string[]>
-  readonly skills: (agent: Agent.Info, model?: SkillSearchModel) => Effect.Effect<string | undefined>
+  readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Skill.Info[]>
   readonly all: () => Effect.Effect<Skill.Info[]>
 }
@@ -166,18 +167,10 @@ export const layer = Layer.effect(
         return base
       }),
 
-      skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info, model?: SkillSearchModel) {
+      skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return
 
         const list = yield* skill.modelInvocable(agent)
-
-        if (model && isSkillSearchDisabled(model)) {
-          return [
-            "Skills provide specialized instructions and workflows for specific tasks.",
-            "Use the skill tool to load a skill when a task matches its description.",
-            Skill.fmt(list, { verbose: true }),
-          ].join("\n")
-        }
 
         return [
           "Skills provide specialized instructions and workflows for specific tasks.",
