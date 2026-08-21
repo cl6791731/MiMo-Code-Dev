@@ -93,27 +93,27 @@ jobs:
           UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           git checkout main
-          # Squash merge: collapses all upstream commits into one local commit
-          # so upstream authors do not appear in the fork's contributor list.
-          # --allow-unrelated-histories is required because the fork history
-          # was rewritten (filter-branch).
-          #
-          # After the squash, HEAD still points to the pre-merge fork commit,
-          # so `git checkout HEAD -- <file>` restores the fork's version.
-          git merge --squash --allow-unrelated-histories --no-edit upstream/main 2>&1 || true
-          # Resolve any add/add conflicts with our fork's version
-          git checkout --ours -- . 2>/dev/null || true
-          # Restore branding/documentation files to the fork's versions
-          git checkout HEAD -- README.md README.zh.md AGENTS.md CONTRIBUTING.md 2>/dev/null || true
-          # Bump desktop version to the upstream tag
-          UPSTREAM_VER="${UPSTREAM_TAG#v}"
-          if [ -n "$UPSTREAM_VER" ]; then
-            sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$UPSTREAM_VER\"/" packages/desktop/package.json
-            git add packages/desktop/package.json
+          # Use -X ours to keep our fork's versions on add/add conflicts
+          # (README, CI config, etc.). This preserves our CI fixes and
+          # customizations rather than letting upstream overwrite them.
+          if git merge --allow-unrelated-histories -X ours --no-edit upstream/main 2>&1; then
+            echo "conflict=false" >> $GITHUB_OUTPUT
+            # Bump desktop version to the upstream tag so the built artifact
+            # and release carry the new version (e.g. v0.1.12 → 0.1.12),
+            # instead of keeping the fork's older version.
+            UPSTREAM_VER="${UPSTREAM_TAG#v}"
+            if [ -n "$UPSTREAM_VER" ]; then
+              cd packages/desktop
+              sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$UPSTREAM_VER\"/" package.json
+              cd ../..
+              git add packages/desktop/package.json
+              git commit -m "chore: bump desktop version to $UPSTREAM_VER" --no-edit 2>/dev/null || true
+            fi
+          else
+            echo "conflict=false" >> $GITHUB_OUTPUT
+            git add .
+            git commit -m "chore: merge upstream $UPSTREAM_TAG (auto-resolve add/add conflicts)" --no-edit 2>/dev/null || true
           fi
-          git add .
-          git commit -m "chore: sync upstream $UPSTREAM_TAG" --no-edit 2>/dev/null || true
-          echo "conflict=false" >> $GITHUB_OUTPUT
 
       - name: Create issue on conflict
         if: env.CONFLICT == 'true'
